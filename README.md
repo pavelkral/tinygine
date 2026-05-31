@@ -1,6 +1,6 @@
-﻿# Tiny Engine
+﻿# TinyGine
 
-A lightweight, multi-API 3D game engine built from scratch in C++. Tiny Engine is designed to be a learning tool and a foundation for building high-performance 3D applications, featuring a clean Entity Component System (ECS), state-of-the-art physics, and an immediate-mode editor interface.
+A lightweight, multi-API 3D game engine. 
 
 ## Features
 
@@ -8,9 +8,9 @@ A lightweight, multi-API 3D game engine built from scratch in C++. Tiny Engine i
 The engine abstracts the graphics layer (RHI - Render Hardware Interface), allowing you to seamlessly switch between three major graphics APIs at runtime:
 * **DirectX 11** (Legacy support, highly stable)
 * **DirectX 12** (Modern, low-overhead API)
-* **Vulkan 1.1** (Cross-platform, low-overhead API via Vulkan Memory Allocator)
+* **Vulkan 1.4** (Cross-platform, low-overhead API via Vulkan Memory Allocator)
 
-### 🧱 Entity Component System (ECS)
+### 🧱 Component System 
 A modular and extensible architecture for game objects.
 * **GameObject:** The base entity in the scene.
 * **Transform:** Handles position, rotation (Euler angles & Quaternions), and scale. Includes double-precision support for large worlds.
@@ -18,11 +18,6 @@ A modular and extensible architecture for game objects.
 * **Colliders:** Box, Sphere, and Capsule primitive shapes.
 * **Rigidbody:** Dynamic and static physics bodies.
 
-### ⚡ Physics (Powered by Jolt Physics)
-Integrated with **Jolt Physics** (the same physics engine used in *Horizon Forbidden West*).
-* Multithreaded physics simulation.
-* Broad-phase and Narrow-phase collision filtering.
-* Native, GPU-accelerated **Debug Line Renderer** for visualizing physics colliders in real-time without FPS drops.
 
 ### 🎨 Graphics & Materials
 * **Physically Based Rendering (PBR):** Support for Albedo, Normal, Metallic, and Roughness maps.
