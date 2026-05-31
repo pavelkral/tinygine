@@ -1,0 +1,16 @@
+{
+    "albedoPath": "assets/textures/brick/brickA.png",
+    "baseColor": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "metalPath": "assets/textures/brick/brickM.png",
+    "metalness": 0.0,
+    "name": "Mat_Static_Floor",
+    "normalPath": "assets/textures/brick/brickN.png",
+    "pipelineType": "Solid",
+    "roughPath": "assets/textures/brick/brickR.png",
+    "roughness": 0.5
+}

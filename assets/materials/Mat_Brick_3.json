@@ -1,0 +1,16 @@
+{
+    "albedoPath": "",
+    "baseColor": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+    ],
+    "metalPath": "",
+    "metalness": 0.10000000149011612,
+    "name": "Mat_Brick_3",
+    "normalPath": "",
+    "pipelineType": "Instanced",
+    "roughPath": "",
+    "roughness": 0.5
+}

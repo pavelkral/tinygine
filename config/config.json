@@ -1,0 +1,9 @@
+{
+    "Window": {
+        "Width": 1920,
+        "Height": 1080,
+        "VSync": true,
+        "EnableFullscreen": false,
+        "UseNativeResolution": false
+    }
+}

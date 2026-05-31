@@ -1,0 +1,30 @@
+#pragma once
+
+#include "pch/Pch.h"
+#include "rhi/RHI.h"
+
+struct DX12Buffer : public RHIBuffer {
+    ComPtr<ID3D12Resource> res;
+    D3D12_VERTEX_BUFFER_VIEW vbv;
+    D3D12_INDEX_BUFFER_VIEW ibv;
+    UINT8* map = nullptr;
+    UINT64 sizePerFrame = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE uavHandle = {};
+    D3D12_RESOURCE_STATES currentState = D3D12_RESOURCE_STATE_COMMON;
+};
+
+struct DX12Texture : public RHITexture {
+    ComPtr<ID3D12Resource> res;
+    D3D12_GPU_DESCRIPTOR_HANDLE srvHandle = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE uavHandle = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = {};
+    D3D12_RESOURCE_STATES currentState = D3D12_RESOURCE_STATE_COMMON;
+};
+
+struct DX12Pipeline : public RHIPipeline {
+    ComPtr<ID3D12PipelineState> pso;
+    ComPtr<ID3D12RootSignature> rs;
+    D3D_PRIMITIVE_TOPOLOGY top;
+};
+

@@ -1,0 +1,16 @@
+{
+    "albedoPath": "",
+    "baseColor": [
+        0.019999999552965164,
+        0.019999999552965164,
+        0.019999999552965164,
+        1.0
+    ],
+    "metalPath": "",
+    "metalness": 1.0,
+    "name": "Mat_Mirror",
+    "normalPath": "",
+    "pipelineType": "Instanced",
+    "roughPath": "",
+    "roughness": 0.029999999329447746
+}

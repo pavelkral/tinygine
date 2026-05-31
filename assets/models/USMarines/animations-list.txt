@@ -1,0 +1,86 @@
+000 - 004   T-pose                               
+005 - 105   Idle 1 (no gun)                      
+110 - 310   Idle 2 (no gun)                      
+315 - 355   Walk (no gun)                        
+360 - 400   Walk backwards (no gun)              
+405 - 435   Run (no gun)                         
+440 - 465   Jump (no gun)                        
+470 - 500   Left turn (no gun)                   
+500 - 530   Right turn (no gun)                  
+545 - 575   Strafe left (no gun)                 
+580 - 610   Strafe right (no gun)                
+615 - 655   Crouch walk (no gun)                 
+655 - 755   Crouch idle (no gun, knee)           
+760 - 780   Hit reaction (no gun)                
+780 - 915   Scared (no gun)                      
+920 - 980   Scared walk (no gun)                 
+985 - 1035  Scared run (no gun)                  
+1040 - 1080 Scared run (no gun)2                 
+1085 - 1165 Surrender (Hands up, no gun)         
+1175 - 1275 Idle 1 (gun down)                    
+1280 - 1480 Idle 2 (gun down)                    
+1485 - 1525 Walk (gun down)                      
+1530 - 1570 Walk backwards (gun down)            
+1575 - 1605 Run (gun down)                       
+1610 - 1635 Jump (gun down)                      
+1640 - 1670 Left turn (gun down)                 
+1670 - 1700 Right turn (gun down)                
+1715 - 1745 Strafe left (gun down)               
+1750 - 1780 Strafe right (gun down)              
+1785 - 1825 Crouch walk (gun down)               
+1825 - 1925 Crouch idle (gun down, knee)         
+1930 - 1950 Hit reaction (gun down)              
+1960 - 2000 Walk (gun up)                        
+2005 - 2045 Walk backwards (gun up)              
+2050 - 2080 Run (gun up)                         
+2085 - 2110 Jump (gun up)                        
+2115 - 2145 Left turn (gun up)                   
+2145 - 2175 Right turn (gun up)                  
+2190 - 2220 Strafe left (gun up)                 
+2225 - 2255 Strafe right (gun up)                
+2260 - 2300 Crouch walk (gun up)                 
+2300 - 2400 Crouch idle (gun up, on one knee)    
+2405 - 2425 Hit reaction (gun up)                
+2425 - 2435 Standing firing 1                    
+2435 - 2455 Standing firing 3                    
+2460 - 2505 Die forward                          
+2510 - 2555 Die backwards                        
+2560 - 2660 Ready with detonator                 
+2665 - 2765 Sit idle (no gun)                    
+2770 - 2870 Chat idle (no gun gesturing)         
+2870 - 2890 Prone(down)                          
+2890 - 2990 Prone(gun_down)                      
+3000 - 3100 Prone(gun_up)                        
+3105 - 3110 Prone(firing_1)                      
+3110 - 3125 Prone(firing_2)                      
+3125 - 3155 Prone(UP)                            
+3160 - 3165 Crouch(firing_1)                     
+3170 - 3175 Crouch(firing2)                      
+3180 - 3230 Belly_crawl(no_gun)                  
+3235 - 3285 Belly_crawl(gun_down)                
+3290 - 3350 Waving                               
+3350 - 3390 Point_forward(no_gun)                
+3390 - 3430 Point_left(no_gun)                   
+3430 - 3480 Point_right(no_gun)                  
+3490 - 3540 Point_forward(gun_down)              
+3540 - 3590 Point_left(gun_down)                 
+3590 - 3640 Point_right(gun_down)                
+3645 - 3690 Beckoning_toward(no_gun)             
+3690 - 3735 Beckoning_away(no_gun)               
+3750 - 3950 Sitting_on_chair(no_gun)             
+3960 - 4100 Scratching_head                      
+4110 - 4135 Melee_with_rifle                     
+4140 - 4210 Throw_grenade                        
+4215 - 4280 Reload_rifle                         
+4280 - 4385 un-jam                               
+4390 - 4490 prisoner                             
+4500 - 4550 Gesturing_yes                        
+4550 - 4600 Gesturing_no                         
+4600 - 4650 Picking_up_rock                      
+4650 - 4700 Throwing_rock                        
+4700 - 4970 angrily_part1                        
+4970 - 5260 angrily_part2                        
+5260 - 5420 angrily_part3                        
+5420 - 5600 Chat_idle_2                          
+5600 - 5850 Chat_idle_3                          
+5860 - 5960 Sleep_on_ground                      
