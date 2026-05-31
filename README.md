@@ -13,13 +13,13 @@ A lightweight, multi-API 3D game engine.
 
 ## Features
 
-### 🚀 Multi-API Rendering Backend
-The engine abstracts the graphics layer (RHI - Render Hardware Interface), allowing you to seamlessly switch between three major graphics APIs at runtime:
+### Multi-API Rendering Backend
+The engine abstracts the graphics layer (RHI - Render Hardware Interface), allowing you to seamlessly switch between three major graphics APIs:
 * **DirectX 11** (Legacy support, highly stable)
 * **DirectX 12** (Modern, low-overhead API)
 * **Vulkan 1.4** (Cross-platform, low-overhead API via Vulkan Memory Allocator)
 
-### 🧱 Component System 
+### Component System 
 A modular and extensible architecture for game objects.
 * **GameObject:** The base entity in the scene.
 * **Transform:** Handles position, rotation (Euler angles & Quaternions), and scale. Includes double-precision support for large worlds.
@@ -28,7 +28,7 @@ A modular and extensible architecture for game objects.
 * **Rigidbody:** Dynamic and static physics bodies.
 
 
-### 🎨 Graphics & Materials
+### Graphics & Materials
 * **Physically Based Rendering (PBR):** Support for Albedo, Normal, Metallic, and Roughness maps.
 * **Shadow Mapping:** Real-time dynamic shadows from directional lights.
 * **Pipeline State Objects (PSO):** Configurable graphics pipelines (`PipelineConfig`) supporting different topologies (e.g., `TriangleList`, `LineList`), culling, and fill modes.
@@ -46,14 +46,14 @@ A modular and extensible architecture for game objects.
   * Dynamic Directional Lights with shadow mapping.
   * Point light support (up to 16 active lights).
 
-## 🧲 Physics System
+## Physics System
 * **Engine:** Integrated [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
 * **Colliders:** Support for Box, Sphere, and Capsule shapes with custom center offsets via `RotatedTranslatedShape`.
 * **Dynamics:** RigidBody support with dynamic, static, and kinematic motion types.
 * **Debug Rendering:** Wireframe visualization of colliders and physics geometry using a line-based debug drawer.
 * **Collision Events:** Callback system (`BeginOverlap`/`EndOverlap`) for interaction logic.
 
-## 🛠 Editor & Tooling
+## Editor & Tooling
 * **WYSIWYG Editor:** Integrated **Dear ImGui** interface.
 * **Gizmo System:** Full-featured **ImGuizmo** implementation for local/world space transformation (Translate, Rotate, Scale).
 * **Inspector:** Real-time component editing and property tweaking.
@@ -62,12 +62,12 @@ A modular and extensible architecture for game objects.
 * **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
 * **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
 
-## 🔊 Audio Engine
+## Audio Engine
 * **Engine:** Integrated [miniaudio](https://github.com/mackron/miniaudio).
 * **Spatial Audio:** 3D spatialization with linear attenuation models.
 * **Features:** Looping, distance-based volume rolloff (min/max distance), and play-on-awake support.
 
-## ⚙️ System & Pipeline
+## System & Pipeline
 * **Data-Driven:** Assets are loaded via `AssetRegistry` which manages caching, lazy loading, and persistence.
 * **Compute-Ready:** Compute shader support for GPU-accelerated tasks (used currently for atmosphere LUT generation and particle simulations).
 
