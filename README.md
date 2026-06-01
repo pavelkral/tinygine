@@ -15,18 +15,18 @@ A lightweight, multi-API 3D game engine.
 
 At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
 * **API Support:** Fully implemented backends for **DirectX 12**, **Vulkan**, and **DirectX 11**.
-* **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer mapping for Color, Normal, and World Position).
+* **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer pre-pass mapping for Color, Normal, and World Position).
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
-* **Skeletal Animation (Assimp):** Hardware-accelerated Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
+* **Skeletal Animation (Assimp):** Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
 * **Compute Shader Integration:** Direct access to Compute Pipelines for parallel GPU calculations (UAV/SRV textures, buffers).
-* **Asset Browser:** File-system integration with Drag & Drop support to spawn entities 3D models (`.fbx`) directly into the scene.
+* **Asset Browser:** File-system integration with Drag & Drop support to spawn 3D models (`.fbx/.gltf`) directly into the scene.
 * **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
 * **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
 * **Realtime Lighting:** Support for Directional and Point Lights with dynamic shadows and IBL.
  
 ###  Environment & Atmospheric Rendering
 
-* **Physically Accurate Atmosphere:** Real-time Rayleigh and Mie scattering computed via GPU Compute Shaders. Generates SkyView and Transmittance Look-Up Tables (LUTs) for breathtaking skies.
+* **Physically Accurate Atmosphere:** Real-time Rayleigh and Mie scattering computed via GPU Compute Shaders. Generates SkyView and Transmittance Look-Up Tables (LUTs) for skies.
 * **Image-Based Lighting (IBL):** Support for Irradiance Maps, Prefiltered Environment Maps, and BRDF LUTs.
 * **Dynamic Shadows:** Directional light shadow mapping integrated directly into the PBR shader pipeline.
 
@@ -85,7 +85,7 @@ The codebase is structured into clear, distinct layers:
 * **Data-Driven:** Assets are loaded via `AssetRegistry` which manages caching, lazy loading, and persistence.
 * **Compute-Ready:** Compute shader support for GPU-accelerated tasks (used currently for atmosphere LUT generation and particle simulations).
 
-### Component System Ecosystem
+### Component Ecosystem
 
 A modular and extensible architecture for game objects.
 * **GameObject:** The base entity in the scene.
