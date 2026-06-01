@@ -13,8 +13,8 @@ A lightweight, multi-API 3D game engine.
 
 ## Features
 
-At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs at runtime.
-* **Multi-API Support:** Fully implemented backends for **DirectX 12**, **Vulkan**, and **DirectX 11**.
+At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
+* **API Support:** Fully implemented backends for **DirectX 12**, **Vulkan**, and **DirectX 11**.
 * **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer mapping for Color, Normal, and World Position).
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
 * **Skeletal Animation (Assimp):** Hardware-accelerated Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
