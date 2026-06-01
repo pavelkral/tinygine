@@ -13,63 +13,90 @@ A lightweight, multi-API 3D game engine.
 
 ## Features
 
-### Multi-API Rendering Backend
-The engine abstracts the graphics layer (RHI - Render Hardware Interface), allowing you to seamlessly switch between three major graphics APIs:
-* **DirectX 11** (Legacy support, highly stable)
-* **DirectX 12** (Modern, low-overhead API)
-* **Vulkan 1.4** (Cross-platform, low-overhead API via Vulkan Memory Allocator)
+At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs at runtime.
+* **Multi-API Support:** Fully implemented backends for **DirectX 12**, **Vulkan**, and **DirectX 11**.
+* **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer mapping for Color, Normal, and World Position).
+* **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
+* **Skeletal Animation (Assimp):** Hardware-accelerated Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
+* **Compute Shader Integration:** Direct access to Compute Pipelines for parallel GPU calculations (UAV/SRV textures, buffers).
+* **Asset Browser:** File-system integration with Drag & Drop support to spawn entities 3D models (`.fbx`) directly into the scene.
+* **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
+* **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
+* **Realtime Lighting:** Support for Directional and Point Lights with dynamic shadows and IBL.
+ 
+###  Environment & Atmospheric Rendering
 
-### Component System 
-A modular and extensible architecture for game objects.
-* **GameObject:** The base entity in the scene.
-* **Transform:** Handles position, rotation (Euler angles & Quaternions), and scale. Includes double-precision support for large worlds.
-* **MeshRenderer:** Binds geometry and materials to the entity.
-* **Colliders:** Box, Sphere, and Capsule primitive shapes.
-* **Rigidbody:** Dynamic and static physics bodies.
+* **Physically Accurate Atmosphere:** Real-time Rayleigh and Mie scattering computed via GPU Compute Shaders. Generates SkyView and Transmittance Look-Up Tables (LUTs) for breathtaking skies.
+* **Image-Based Lighting (IBL):** Support for Irradiance Maps, Prefiltered Environment Maps, and BRDF LUTs.
+* **Dynamic Shadows:** Directional light shadow mapping integrated directly into the PBR shader pipeline.
 
+###  GPU-Driven Particle Systems
 
-### Graphics & Materials
-* **Physically Based Rendering (PBR):** Support for Albedo, Normal, Metallic, and Roughness maps.
-* **Shadow Mapping:** Real-time dynamic shadows from directional lights.
-* **Pipeline State Objects (PSO):** Configurable graphics pipelines (`PipelineConfig`) supporting different topologies (e.g., `TriangleList`, `LineList`), culling, and fill modes.
-* **Mipmap Generation:** Automatic CPU-side mipmap generation via `stb_image`.
-* **Advanced Post-Processing Chain:**
-  * **SSAO:** Screen Space Ambient Occlusion with blur pass.
-  * **SSR:** Screen Space Reflections.
-  * **Bloom:** High-quality glow effect.
-  * **Atmosphere:** Precomputed Look-Up Tables (LUTs) for realistic atmospheric scattering (Transmittance & SkyView) via Compute Shaders.
-  * **Vignette:** Vignetting effect for cinematic look.
-* **Animation:**
-  * Hardware-accelerated Skinned Mesh Rendering.
-  * Bone matrix interpolation (Skeletal animation) processed in C++ and uploaded to GPU buffers.
-* **Lighting:**
-  * Dynamic Directional Lights with shadow mapping.
-  * Point light support (up to 16 active lights).
+* **Compute-Shader Particles:** High-performance particle simulation dispatched entirely on the GPU (`DispatchGPU`), bypassing CPU bottlenecks.
+* **Component-Based Integration:** Controlled via the `ParticleSystemComponent` with customizable local directions, lifetimes, and spawning logic.
 
-## Physics System
-* **Engine:** Integrated [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
+###  Post-Processing Stack
+
+* **SSAO (Screen Space Ambient Occlusion):** Calculates 64 random hemisphere samples, blurred and composited over the scene.
+* **SSR (Screen Space Reflections):** Real-time reflection mapping for metallic/glossy surfaces.
+* **Bloom:** High-quality glow effects rendered via ping-pong render targets.
+* **Vignette:** Cinematic lens shading.
+
+###  Physics (Jolt Physics Integration) [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
+
+Powered by the industry-leading **Jolt Physics** engine (used in *Horizon Forbidden West*).
+* **Engine:** Integrated 
 * **Colliders:** Support for Box, Sphere, and Capsule shapes with custom center offsets via `RotatedTranslatedShape`.
 * **Dynamics:** RigidBody support with dynamic, static, and kinematic motion types.
 * **Debug Rendering:** Wireframe visualization of colliders and physics geometry using a line-based debug drawer.
-* **Collision Events:** Callback system (`BeginOverlap`/`EndOverlap`) for interaction logic.
-
-## Editor & Tooling
-* **WYSIWYG Editor:** Integrated **Dear ImGui** interface.
-* **Gizmo System:** Full-featured **ImGuizmo** implementation for local/world space transformation (Translate, Rotate, Scale).
-* **Inspector:** Real-time component editing and property tweaking.
-* **Hierarchy:** Scene object management.
-* **Asset Browser:** File-system integration with Drag & Drop support to spawn entities directly into the scene.
-* **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
-* **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
+* **Collision Events:** Callback system (`BeginOverlap`/`EndOverlap`) for interaction logi
+* **Dynamic Colliders:** Box, Sphere, Capsule, and Mesh colliders.
+* **Convex Hulls:** Automatic generation of optimized convex hulls from high-poly meshes, with live slider adjustments for `mHullTolerance` and `mMaxConvexRadius`.
+* **Advanced Skeletal Ragdolls (`SkeletalRagdollComponent`):**
+  * Parses the FBX bone hierarchy (`Pelvis`, `Spine`, `Head`, `Limbs`).
+  * Generates scaled Jolt Capsules and links them via `PointConstraint` joints.
+  * Overrides the `Animator` bone matrices in real-time, allowing the SkinnedMesh to physically collapse and roll on the ground while maintaining visual fidelity (Rigid Corpse/Ragdoll behavior).
 
 ## Audio Engine
+
 * **Engine:** Integrated [miniaudio](https://github.com/mackron/miniaudio).
 * **Spatial Audio:** 3D spatialization with linear attenuation models.
 * **Features:** Looping, distance-based volume rolloff (min/max distance), and play-on-awake support.
 
+## Editor & Tooling
+
+* **WYSIWYG Editor:** Integrated **Dear ImGui** interface.
+* **Gizmo System:** Full-featured **ImGuizmo** implementation for local/world space transformation (Translate, Rotate, Scale).
+* **Inspector:** Real-time component editing and property tweaking.
+* **Hierarchy:** Scene object management.
+	
+
+## Architecture Overview
+
+The codebase is structured into clear, distinct layers:
+1.  **Helper Functions:** Image loading and mipmap generation.
+2.  **RHI Base:** The abstract interface (`RHI`, `RHIBuffer`, `RHITexture`, `RHIPipeline`).
+3.  **RHI Implementations:** The concrete classes (`RHI_DX11`, `RHI_DX12`, `RHI_Vulkan`).
+4.  **ECS & Physics:** The `GameObject`, `Component` classes, and Jolt Physics integration (`BPLayerInterfaceImpl`, etc.).
+5.  **Main Engine Class:** The `Engine` class handling initialization, the main loop (`Run`), input, updating, and rendering.
+
 ## System & Pipeline
+
 * **Data-Driven:** Assets are loaded via `AssetRegistry` which manages caching, lazy loading, and persistence.
 * **Compute-Ready:** Compute shader support for GPU-accelerated tasks (used currently for atmosphere LUT generation and particle simulations).
+
+### Component System Ecosystem
+
+A modular and extensible architecture for game objects.
+* **GameObject:** The base entity in the scene.
+* **Transform:** Handles position, rotation (Euler angles & Quaternions), and scale. Includes double-precision support for large worlds.
+
+The engine ships with a modular library of game-ready components:
+* **Rendering:** `MeshRenderer`, `SkinnedMeshRenderer`, `DirectionalLight`, `PointLight`, `ParticleSystemComponent`.
+* **Physics:** `Rigidbody`, `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider`, `SkeletalRagdollComponent`.
+* **Gameplay Logic:** `PlayerController`.
+* **Utility:** `AudioSource`, `Animator`.
+
 
 ## Getting Started
 
@@ -90,15 +117,8 @@ The engine relies on the following libraries (ensure they are linked in your pro
 * [DirectXTK](https://github.com/microsoft/DirectXTK) (for SimpleMath)
 * [Tracy Profiler](https://github.com/wolfpld/tracy) (Optional, for performance profiling)
 
+Note: If no saved .json scene is found in the assets/ folder, the engine will generate a default "Bootstrap" demo level.
 
-## Architecture Overview
-
-The codebase is structured into clear, distinct layers:
-1.  **Helper Functions:** Image loading and mipmap generation.
-2.  **RHI Base:** The abstract interface (`RHI`, `RHIBuffer`, `RHITexture`, `RHIPipeline`).
-3.  **RHI Implementations:** The concrete classes (`RHI_DX11`, `RHI_DX12`, `RHI_Vulkan`).
-4.  **ECS & Physics:** The `GameObject`, `Component` classes, and Jolt Physics integration (`BPLayerInterfaceImpl`, etc.).
-5.  **Main Engine Class:** The `Engine` class handling initialization, the main loop (`Run`), input, updating, and rendering.
 
 ## Controls
 * `TAB`: Toggle between Editor UI mode (cursor visible) and FPS Camera mode.
