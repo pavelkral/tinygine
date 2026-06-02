@@ -92,7 +92,7 @@ void AssetRegistry::LoadHardcodedAssets() {
 void AssetRegistry::LoadDiskAssets() {
 	if (!fs::exists("assets/materials")) return;
 	for (const auto& entry : fs::directory_iterator("assets/materials")) {
-		if (entry.path().extension() == ".json") {
+		if (entry.path().extension() == ".mat") {
 			std::ifstream file(entry.path());
 			if (file.is_open()) {
 				json j; file >> j; file.close();
@@ -124,7 +124,7 @@ void AssetRegistry::SaveAssets() {
 	for (const auto& [name, mat] : m_allMaterials) {
 		if (name.find("FBX_") != std::string::npos) continue;
 
-		std::string path = "assets/materials/" + name + ".json";
+		std::string path = "assets/materials/" + name + ".mat";
 		std::ofstream file(path);
 		if (file.is_open()) {
 			file << mat->Serialize().dump(4);

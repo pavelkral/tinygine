@@ -71,12 +71,12 @@ bool Engine::OnInit(HINSTANCE hInstance, int nCmdShow) {
 	SetupEngineUIStyle();
 
 	m_loadDialog.SetTitle("Open Scene");
-	m_loadDialog.SetTypeFilters({ ".json" });
+	m_loadDialog.SetTypeFilters({ ".scene" });
 	m_loadDialog.SetPwd("assets");
 
 	m_saveDialog = ImGui::FileBrowser(ImGuiFileBrowserFlags_EnterNewFilename | ImGuiFileBrowserFlags_CreateNewDir);
 	m_saveDialog.SetTitle("Save Scene As...");
-	m_saveDialog.SetTypeFilters({ ".json" });
+	m_saveDialog.SetTypeFilters({ ".scene" });
 	m_saveDialog.SetPwd("assets");
 
 	JPH::RegisterDefaultAllocator();
@@ -102,7 +102,7 @@ bool Engine::OnInit(HINSTANCE hInstance, int nCmdShow) {
 		return false;
 	}
 
-	// Inicializace nov�ch subsyst�m�
+	// init subsystems assets
 	m_assets.Init(m_rhi.get());
 	m_sceneManager.Init(m_rhi.get(), m_physics.get(), &m_assets, &m_audioEngine, &m_camera);
 
@@ -148,7 +148,7 @@ void Engine::LoadResourcesAndScene() {
 	RecreateRenderTargets();
 	InitSSAO();
 
-	// 1. PIPELINE & BUFFERS (Z�kladn� infrastruktura enginu)
+	// 1. PIPELINE & BUFFERS 
 	PipelineConfig fsCfg;
 	fsCfg.vsPath = L"shaders/rhi/fullscreen.vert.hlsl";
 	fsCfg.cullMode = CullMode::None; fsCfg.depthTest = false; fsCfg.depthWrite = false; fsCfg.numRenderTargets = 1;
@@ -195,14 +195,14 @@ void Engine::LoadResourcesAndScene() {
 
 	m_simState = SimState::Stopped;
 
-	std::string sceneToLoad = "assets/empty.json";
+	std::string sceneToLoad = "assets/empty.scene";
 
 	if (fs::exists(sceneToLoad)) {
 		m_sceneManager.LoadScene(sceneToLoad);
 	}
 	else {
-		std::cout << "[Engine] JSON level '" << sceneToLoad << "' nenalezen. Generuji bootstrapping scenu!\n";
-		//BuildHardcodedScene(); // Vytvo�� scenu, at ji m��e� ulo�it!
+		std::cout << "[Engine] Scene level '" << sceneToLoad << "' not found. Generating bootstrapping scene!\n";
+		BuildHardcodedScene(); // gen
 	}
 }
 
@@ -210,11 +210,12 @@ void Engine::LoadResourcesAndScene() {
 void Engine::BuildHardcodedScene() {
 	JPH::BodyInterface& bi = m_physics->GetBodyInterface();
 
-	// Zajist�me si referenci na ji� na�ten� materi�ly z AssetRegistry
+	//   AssetRegistry material 
 	std::vector<std::shared_ptr<Material>> brickMats;
-	for (int i = 0; i < 4; i++) brickMats.push_back(m_assets.m_allMaterials["Mat_Brick_" + std::to_string(i)]);
+	for (int i = 0; i < 4; i++) 
+		brickMats.push_back(m_assets.m_allMaterials["Mat_Brick_" + std::to_string(i)]);
 
-	// --- VYTV��EN� GAMEOBJEKT� ---
+	// --- Floor ---
 	auto floorObj = std::make_unique<GameObject>("Floor");
 	floorObj->transform.position = { 0, -1, 0 }; floorObj->transform.scale = { 200.0, 2.0, 200.0 };
 	floorObj->AddComponent<MeshRenderer>(m_assets.m_meshes["FloorCube"], m_assets.m_allMaterials["Mat_Static_Floor"], false, "FloorCube");
@@ -222,7 +223,7 @@ void Engine::BuildHardcodedScene() {
 	floorObj->AddComponent<Rigidbody>(&bi, false);
 	m_sceneManager.AddObject(std::move(floorObj));
 
-	// Zdi
+	// walls
 	auto createWall = [&](std::string name, SM::Vector3 pos, SM::Vector3 scale, std::shared_ptr<Material> mat) {
 		auto wall = std::make_unique<GameObject>(name);
 		wall->transform.position = { (double)pos.x, (double)pos.y, (double)pos.z };
@@ -288,8 +289,14 @@ void Engine::BuildHardcodedScene() {
 		}
 	}
 
-	// POZOR: K z�sk�n� spr�vn� cesty pot�ebujeme na chv�li nakonfigurovat pipelinu, a�koliv AssetRegistry ji �e�� v sob�.
-	PipelineConfig skelCfg; skelCfg.vsPath = L"shaders/rhi/pbr-skinned.vert.hlsl"; skelCfg.psPath = L"shaders/rhi/pbr-skinned.frag.hlsl"; skelCfg.useInstancing = false; skelCfg.isSkinned = true; skelCfg.numRenderTargets = 3;
+	// warning: this pipeline config temp is allready in use in AssetRegistry when loading the skeletal meshes, 
+	// if you change it here, it will affect all skinned meshes that use the same config. For a more robust solution, consider creating separate pipeline configs for different types of skinned meshes or allowing dynamic configuration when loading assets.
+	PipelineConfig skelCfg; 
+	skelCfg.vsPath = L"shaders/rhi/pbr-skinned.vert.hlsl"; 
+	skelCfg.psPath = L"shaders/rhi/pbr-skinned.frag.hlsl"; 
+	skelCfg.useInstancing = false; 
+	skelCfg.isSkinned = true; 
+	skelCfg.numRenderTargets = 3;
 
 	auto player1 = std::make_unique<GameObject>("scifi-marine");
 	player1->transform.position = { -20, 0, -40 }; player1->transform.scale = { 0.05f, 0.05f, 0.05f };
@@ -354,46 +361,46 @@ void Engine::BuildHardcodedScene() {
 		gridMats.push_back(mat);
 	}
 
-	//int entityCount = 0;
-	//float spacing = 2.5f;
-	//for (int y = 0; y < 12; ++y) {
-	//for (int x = -10; x < 10; ++x) {
-	//for (int z = -10; z < 10; ++z) {
-	//    auto go = std::make_unique<GameObject>("Entity_" + std::to_string(entityCount++));
-	//    float jitterX = ((rand() % 100) / 100.0f) * 0.8f - 0.4f;
-	//    float jitterY = ((rand() % 100) / 100.0f) * 0.8f - 0.4f;
-	//    float jitterZ = ((rand() % 100) / 100.0f) * 0.8f - 0.4f;
+	int entityCount = 0;
+	float spacing = 2.5f;
+	for (int y = 0; y < 12; ++y) {
+	for (int x = -10; x < 10; ++x) {
+	for (int z = -10; z < 10; ++z) {
+	    auto go = std::make_unique<GameObject>("Entity_" + std::to_string(entityCount++));
+	    float jitterX = ((rand() % 100) / 100.0f) * 0.8f - 0.4f;
+	    float jitterY = ((rand() % 100) / 100.0f) * 0.8f - 0.4f;
+	    float jitterZ = ((rand() % 100) / 100.0f) * 0.8f - 0.4f;
 
-	//    go->transform.position = { static_cast<double>(x * spacing) + jitterX, 10.0 + static_cast<double>(y * spacing) + jitterY, static_cast<double>(z * spacing) + jitterZ };
-	//    go->transform.eulerAngles = SM::Vector3(static_cast<float>(rand() % 360), static_cast<float>(rand() % 360), static_cast<float>(rand() % 360));
-	//    go->transform.UpdateRotation();
+	    go->transform.position = { static_cast<double>(x * spacing) + jitterX, 10.0 + static_cast<double>(y * spacing) + jitterY, static_cast<double>(z * spacing) + jitterZ };
+	    go->transform.eulerAngles = SM::Vector3(static_cast<float>(rand() % 360), static_cast<float>(rand() % 360), static_cast<float>(rand() % 360));
+	    go->transform.UpdateRotation();
 
-	//    float s = 0.6f + ((rand() % 100) / 100.0f) * 0.9f;
-	//    go->transform.scale = { s, s, s };
+	    float s = 0.6f + ((rand() % 100) / 100.0f) * 0.9f;
+	    go->transform.scale = { s, s, s };
 
-	//    auto randomMat = gridMats[rand() % gridMats.size()];
-	//    int shapeType = rand() % 3;
+	    auto randomMat = gridMats[rand() % gridMats.size()];
+	    int shapeType = rand() % 3;
 
-	//    if (shapeType == 0) {
-	//        go->AddComponent<MeshRenderer>(m_assets.m_meshes["Cube"], randomMat, true, "Cube");
-	//        go->AddComponent<BoxCollider>(SM::Vector3(1.0f * s, 1.0f * s, 1.0f * s));
-	//        go->AddComponent<RotatingObstacle>();
-	//    }
-	//    else if (shapeType == 1) {
-	//        go->AddComponent<MeshRenderer>(m_assets.m_meshes["Sphere"], randomMat, true, "Sphere");
-	//        go->AddComponent<SphereCollider>(0.5f * s);
-	//        go->AddComponent<BouncingJumper>();
-	//    }
-	//    else {
-	//        go->AddComponent<MeshRenderer>(m_assets.m_meshes["Capsule"], randomMat, true, "Capsule");
-	//        go->AddComponent<CapsuleCollider>(0.5f * s, 0.5f * s);
-	//        go->AddComponent<PlayerJumper>();
-	//    }
-	//    go->AddComponent<Rigidbody>(&bi, true);
-	//    m_sceneManager.AddObject(std::move(go));
-	//}
-	//}
-	//}
+	    if (shapeType == 0) {
+	        go->AddComponent<MeshRenderer>(m_assets.m_meshes["Cube"], randomMat, true, "Cube");
+	        go->AddComponent<BoxCollider>(SM::Vector3(1.0f * s, 1.0f * s, 1.0f * s));
+	        go->AddComponent<RotatingObstacle>();
+	    }
+	    else if (shapeType == 1) {
+	        go->AddComponent<MeshRenderer>(m_assets.m_meshes["Sphere"], randomMat, true, "Sphere");
+	        go->AddComponent<SphereCollider>(0.5f * s);
+	        go->AddComponent<BouncingJumper>();
+	    }
+	    else {
+	        go->AddComponent<MeshRenderer>(m_assets.m_meshes["Capsule"], randomMat, true, "Capsule");
+	        go->AddComponent<CapsuleCollider>(0.5f * s, 0.5f * s);
+	        go->AddComponent<PlayerJumper>();
+	    }
+	    go->AddComponent<Rigidbody>(&bi, true);
+	    m_sceneManager.AddObject(std::move(go));
+	}
+	}
+	}
 
 	m_sceneManager.StartAll();
 	std::cout << ">>> BOOTSTRAP HOTOV! Bezte v UI do File -> Save Scene a ulozte jako 'default_scene.json' <<<\n";
@@ -573,7 +580,7 @@ void Engine::OnRender() {
 
 		for (const auto& obj : m_sceneManager.m_objects) {
 			if (auto smr = obj->GetComponent<SkinnedMeshRenderer>()) {
-				if (!smr->mesh) continue; // Bezpe�nostn� pojistka
+				if (!smr->mesh) continue; // Safety check
 
 				if (auto anim = obj->GetComponent<Animator>()) m_rhi->SetBoneUniforms(m_boneBuffer.get(), anim->finalBoneMatrices.data(), sizeof(SM::Matrix) * MAX_BONES);
 				for (size_t i = 0; i < smr->mesh->subMeshes.size(); i++) {
@@ -628,7 +635,7 @@ void Engine::OnRender() {
 
 	for (const auto& obj : m_sceneManager.m_objects) {
 		if (auto smr = obj->GetComponent<SkinnedMeshRenderer>()) {
-			if (!smr->mesh) continue; // Bezpe�nostn� pojistka
+			if (!smr->mesh) continue; // Safety check
 
 			bool hasBones = false;
 			if (auto anim = obj->GetComponent<Animator>()) {
@@ -647,7 +654,7 @@ void Engine::OnRender() {
 				const auto& subMesh = smr->mesh->subMeshes[i];
 				if (!subMesh.vb) continue;
 
-				// BEZPE�N� P��STUP K MATERI�L�M
+				// SAFE ACCESS TO MATERIALS
 				Material* activeMat = subMesh.material.get();
 				if (i < smr->materialOverrides.size() && smr->materialOverrides[i]) {
 					activeMat = smr->materialOverrides[i].get();
@@ -713,7 +720,7 @@ void Engine::OnRender() {
 			else if (auto sph = dynamic_cast<SphereCollider*>(col)) DebugDraw::DrawSphere(finalPos, rot, sph->radius, color);
 			else if (auto cap = dynamic_cast<CapsuleCollider*>(col)) DebugDraw::DrawCapsule(finalPos, rot, cap->halfHeight, cap->radius, color);
 			else if (auto mc = dynamic_cast<MeshCollider*>(col)) {
-				// P�ID�NO: Skute�n� vykreslen� dr�t�n�ho modelu (Wireframe) z CPU dat
+				// Added: Actual wireframe rendering from CPU data
 				SM::Matrix modelMat = SM::Matrix::CreateScale(obj->transform.scale) * SM::Matrix::CreateFromQuaternion(rot) * SM::Matrix::CreateTranslation(finalPos);
 
 				auto drawTriangle = [&](const SM::Vector3& a, const SM::Vector3& b, const SM::Vector3& c) {
@@ -745,16 +752,16 @@ void Engine::OnRender() {
 					}
 				}
 				else {
-					// Z�loha
+					// backup - bounding box
 					DebugDraw::DrawBox(finalPos, rot, SM::Vector3(0.5f, 0.5f, 0.5f), color);
 				}
 			}
 		}
-		// Vykreslen� SkeletalRagdollComponent
+		// draw SkeletalRagdollComponent
 		for (const auto& obj : m_sceneManager.m_objects) {
 			if (auto rag = obj->GetComponent<SkeletalRagdollComponent>()) {
 
-				// 1. VYKRESLEN� KOSTRY (�lut� body pro ka�d� kloub FBX modelu)
+				// 1. draw bones (yellow spheres - always, regardless of ragdoll state)
 				if (rag->showDebugBones) {
 					if (auto anim = obj->GetComponent<Animator>()) {
 						if (anim->skelMesh) {
@@ -763,18 +770,18 @@ void Engine::OnRender() {
 								SM::Matrix::CreateTranslation(static_cast<float>(obj->transform.position.x), static_cast<float>(obj->transform.position.y), static_cast<float>(obj->transform.position.z));
 
 							for (const auto& [name, info] : anim->skelMesh->boneInfoMap) {
-								// Inverzn� matice n�m d� p�esnou v�choz� pozici kloubu (bodu ot��en�) kosti
+								// Inverse matrix gives us the exact initial position of the joint (rotation point) of the bone
 								SM::Matrix boneLocal = info.offsetMatrix.Invert();
 								SM::Vector3 boneWorldPos = SM::Vector3::Transform(boneLocal.Translation(), worldMat);
 
-								// Vykresl�me �lut� kuli�ky velikosti 3 cm reprezentuj�c� skeleton
+								// Draw yellow spheres of size 3 cm representing the skeleton
 								DebugDraw::DrawSphere(boneWorldPos, SM::Quaternion::Identity, 0.03f, SM::Vector3(1.0f, 1.0f, 0.0f));
 							}
 						}
 					}
 				}
 
-				// 2. VYKRESLEN� FYZIKY (Fialov� kapsle - pouze jakmile se loutka odp�l�)
+				// 2. draw physics (purple capsules - only when ragdoll is active)
 				for (const auto& part : rag->m_mappedBones) {
 					JPH::BodyID partID = part.bodyID;
 					if (!partID.IsInvalid() && bi.IsAdded(partID)) {
@@ -1507,7 +1514,7 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	m_saveDialog.Display();
 	if (m_saveDialog.HasSelected()) {
 		std::string path = m_saveDialog.GetSelected().string();
-		if (path.find(".json") == std::string::npos) path += ".json";
+		if (path.find(".scene") == std::string::npos) path += ".scene";
 		m_sceneManager.SaveScene(path);
 		m_saveDialog.ClearSelected();
 	}

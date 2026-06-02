@@ -91,7 +91,7 @@ A modular and extensible architecture for game objects.
 * **GameObject:** The base entity in the scene.
 * **Transform:** Handles position, rotation (Euler angles & Quaternions), and scale. Includes double-precision support for large worlds.
 
-The engine ships with a modular library of game-ready components:
+The engine ships with a few game-ready components:
 * **Rendering:** `MeshRenderer`, `SkinnedMeshRenderer`, `DirectionalLight`, `PointLight`, `ParticleSystemComponent`.
 * **Physics:** `Rigidbody`, `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider`, `SkeletalRagdollComponent`.
 * **Gameplay Logic:** `PlayerController`.
