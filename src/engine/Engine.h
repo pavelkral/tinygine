@@ -74,7 +74,7 @@ private:
 
     SimState m_simState = SimState::Stopped;
     bool m_cameraActive = false;
-
+    bool m_enablePhysicallyBasedSky = true;
     std::unique_ptr<Skybox> m_skybox;
     std::unique_ptr<Atmosphere> m_atmosphere;
     FpsCamera m_camera;

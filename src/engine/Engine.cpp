@@ -361,7 +361,7 @@ void Engine::BuildHardcodedScene() {
 		gridMats.push_back(mat);
 	}
 
-	int entityCount = 0;
+	/*int entityCount = 0;
 	float spacing = 2.5f;
 	for (int y = 0; y < 12; ++y) {
 	for (int x = -10; x < 10; ++x) {
@@ -400,7 +400,7 @@ void Engine::BuildHardcodedScene() {
 	    m_sceneManager.AddObject(std::move(go));
 	}
 	}
-	}
+	}*/
 
 	m_sceneManager.StartAll();
 	std::cout << ">>> BOOTSTRAP HOTOV! Bezte v UI do File -> Save Scene a ulozte jako 'default_scene.json' <<<\n";
@@ -553,12 +553,13 @@ void Engine::OnRender() {
 	shadowGlobal.projection = XMMatrixTranspose(lightProj);
 
 	m_rhi->BeginFrame();
-
 	SM::Vector3 sunDirToSun = SM::Vector3(-dirLightDir.x, -dirLightDir.y, -dirLightDir.z);
 	sunDirToSun.Normalize();
 
-	if (m_atmosphere) m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), sunDirToSun, { m_camera.pos.x, m_camera.pos.y, m_camera.pos.z });
-
+	// Počítáme atmosféru pouze tehdy, je-li zapnutá
+	if (m_enablePhysicallyBasedSky && m_atmosphere) {
+		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), sunDirToSun, { m_camera.pos.x, m_camera.pos.y, m_camera.pos.z });
+	}
 	if (m_simState == SimState::Playing) {
 		for (const auto& obj : m_sceneManager.m_objects) {
 			if (auto psc = obj->GetComponent<ParticleSystemComponent>()) psc->DispatchGPU(m_computeUniformBuffer.get());
@@ -683,9 +684,12 @@ void Engine::OnRender() {
 		}
 	}
 
-	if (m_atmosphere) m_atmosphere->RenderSky(m_rhi.get(), m_globalBuffer.get(), gData);
-	if (m_skybox) m_skybox->Render(m_rhi.get(), m_globalBuffer.get(), gData);
-
+	if (m_enablePhysicallyBasedSky) {
+		if (m_atmosphere) m_atmosphere->RenderSky(m_rhi.get(), m_globalBuffer.get(), gData);
+	}
+	else {
+		if (m_skybox) m_skybox->Render(m_rhi.get(), m_globalBuffer.get(), gData);
+	}
 	for (const auto& obj : m_sceneManager.m_objects) {
 		if (auto psc = obj->GetComponent<ParticleSystemComponent>()) psc->Render(m_globalBuffer.get(), gData);
 	}
@@ -1252,6 +1256,10 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::End();
 
 	ImGui::Begin("Post-Processing");
+
+	ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Environment");
+	ImGui::Checkbox("Physically Based Sky", &m_enablePhysicallyBasedSky);
+	ImGui::Separator();
 	ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Ambient Occlusion");
 	ImGui::Checkbox("Enable SSAO", &m_enableSSAO);
 	if (m_enableSSAO) {
@@ -1265,8 +1273,9 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Checkbox("Vignette", &m_enableVignette);
 	ImGui::End();
 
-	if (m_atmosphere) m_atmosphere->DrawDebug();
-
+	if (m_enablePhysicallyBasedSky && m_atmosphere) {
+		m_atmosphere->DrawDebug();
+	}
 	ImGui::Begin("Inspector");
 	if (m_sceneManager.m_selectedObject) {
 		char nameBuf[128];
