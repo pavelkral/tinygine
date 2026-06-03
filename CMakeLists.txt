@@ -24,7 +24,6 @@ option(TRACY_ENABLE "Enable Tracy profiler" ON)
 
 include(FetchContent)
 
-
 # -----------------------------------------------------------------------------
 # CONFIGURE JOLT PHYSICS LIB
 # -----------------------------------------------------------------------------

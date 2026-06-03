@@ -1,7 +1,7 @@
 #include "engine/environment/VolumetricClouds.h"
-#include "stb_image_write.h"
-//#include "stb_image_write.h"
+#include "stb_image_write.h" 
 
+// ... Pomocné matematické funkce (Wrap, PRandPeriodic, TileableValueNoise, TileableFBM, SmoothStep) zùstávají stejné ...
 int VolumetricClouds::Wrap(int v, int period) { return (v % period + period) % period; }
 
 float VolumetricClouds::PRandPeriodic(int x, int y, int pX, int pY, int seed) {
@@ -78,31 +78,25 @@ void VolumetricClouds::GenerateWeatherMap(RHI* rhi) {
         }
     }
 
-    // Pøedpokládám, že Tvé RHI má funkci na vytvoøení/update 2D textury z RAW dat
+    // Uložíme jako doèasný soubor a hned využijeme tvou RHI funkci
     std::string tempPath = "assets/textures/temp_weather.png";
     stbi_write_png(tempPath.c_str(), w, h, 4, data.data(), w * 4);
 
-    // Použijeme tvou stávající metodu, kterou engine už má (tøeba tu pro Skybox)
-    // Pokud se u tebe jmenuje jinak, uprav si název:
-    m_texWeatherMap = rhi->CreateDDSTexture(std::wstring(tempPath.begin(), tempPath.end()));
+    std::wstring wPath(tempPath.begin(), tempPath.end());
+    m_texWeatherMap = rhi->CreateTexture(wPath);
 }
 
 bool VolumetricClouds::Init(RHI* rhi) {
     if (!rhi) return false;
 
-    // 1. Textury pro 3D šum (Shape 128x128x128, Detail 64x64x64)
-    // Uprav parametry podle toho, jak tvé RHI definuje CreateUAVTexture3D (šíøka, výška, hloubka)
     m_texShapeNoise = rhi->CreateUAVTexture3D(128, 128, 128);
     m_texDetailNoise = rhi->CreateUAVTexture3D(64, 64, 64);
 
-    // 2. Compute Pipeliny pro generování 3D šumu
     m_csShapeNoise = rhi->CreateComputePipeline(L"shaders/clouds/cloud_shape.comp.hlsl");
     m_csDetailNoise = rhi->CreateComputePipeline(L"shaders/clouds/cloud_detail.comp.hlsl");
 
-    // 3. Poèasí na CPU
     GenerateWeatherMap(rhi);
 
-    // 4. Grafické Pipeliny (Raymarch a Upscale)
     PipelineConfig rayCfg;
     rayCfg.vsPath = L"shaders/clouds/fullscreen.vert.hlsl";
     rayCfg.psPath = L"shaders/clouds/cloud_raymarch.frag.hlsl";
@@ -115,30 +109,33 @@ bool VolumetricClouds::Init(RHI* rhi) {
 
     PipelineConfig upCfg = rayCfg;
     upCfg.psPath = L"shaders/clouds/cloud_upscale.frag.hlsl";
-    // Upscale musí blendovat mraky pøes zbytek scény!
     upCfg.enableBlend = true;
     m_graphicsUpscale = rhi->CreatePipeline(upCfg);
 
-    // 5. Half-Res Render Target
     int w, h;
     rhi->GetSize(w, h);
     m_texHalfRes = rhi->CreateRenderTarget(w / 2, h / 2, 0);
 
     return true;
 }
-
-void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, const SM::Matrix& view, const SM::Matrix& proj, const SM::Vector3& camPosWorld, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture) {
+void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, const SM::Vector3& camPosWorld, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget) {
     if (!m_texHalfRes) return;
-    // --- PØÍPRAVA DAT (CloudCB) ---
+
     if (!m_isNoiseGenerated) {
+        struct NoiseParams { uint32_t baseFreq; uint32_t seed; uint32_t pad0; uint32_t pad1; };
+
         if (m_csShapeNoise) {
+            NoiseParams sp = { 4, 1337, 0, 0 };
             rhi->SetComputePipeline(m_csShapeNoise.get());
+            rhi->SetComputeUniforms(computeUniforms, &sp, sizeof(NoiseParams), 0);
             rhi->SetComputeTextureUAV(m_texShapeNoise.get(), 0);
             rhi->DispatchCompute(128 / 8, 128 / 8, 128 / 8);
             rhi->ComputeBarrier(m_texShapeNoise.get());
         }
         if (m_csDetailNoise) {
+            NoiseParams dp = { 4, 4242, 0, 0 };
             rhi->SetComputePipeline(m_csDetailNoise.get());
+            rhi->SetComputeUniforms(computeUniforms, &dp, sizeof(NoiseParams), 0);
             rhi->SetComputeTextureUAV(m_texDetailNoise.get(), 0);
             rhi->DispatchCompute(64 / 8, 64 / 8, 64 / 8);
             rhi->ComputeBarrier(m_texDetailNoise.get());
@@ -152,21 +149,17 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, const SM::Ma
     cb.camUp = { invView._21, invView._22, invView._23, 0.0f };
     cb.camForward = { invView._31, invView._32, invView._33, 0.0f };
 
+    cb.camPosAbs = { camPosWorld.x, camPosWorld.y, camPosWorld.z };
+    cb.timeSeconds = timeSeconds * m_Settings.timeScale;
+    cb.planetRadius = m_Settings.planetRadius;
+
     cb.tanHalfFov = 1.0f / proj._22;
     int w, h; rhi->GetSize(w, h);
     cb.aspect = (float)w / (float)h;
-    cb.camPosRel = { 0.0f, camPosWorld.y, 0.0f };
-    cb.invProj = proj.Invert().Transpose();
-    cb.planetRadius = m_Settings.planetRadius;
-    cb.timeSeconds = timeSeconds * m_Settings.timeScale;
-    cb.camPosAbs = { (float)camPosWorld.x, (float)camPosWorld.y, (float)camPosWorld.z };
 
-    // ... (Zbytek kódu zùstává stejný až po nahrání textur v Raymarch Passu)
-
-
-    // Modulo Matematika proti tøesení (Double -> Float offsety)
-    double windDx = (double)timeSeconds * m_Settings.windSpeedX;
-    double windDz = (double)timeSeconds * m_Settings.windSpeedZ;
+    // --- VÝPOÈET OFFSETÙ POMOCÍ DOUBLE (Zabrání pohybu mrakù s kamerou) ---
+    double windDx = (double)cb.timeSeconds * m_Settings.windSpeedX;
+    double windDz = (double)cb.timeSeconds * m_Settings.windSpeedZ;
 
     double wSize = (double)m_Settings.weatherMapSize;
     double wx = fmod(camPosWorld.x + windDx, wSize);
@@ -185,6 +178,7 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, const SM::Ma
     double dz = fmod(camPosWorld.z + windDz * 1.5, dSize);
     if (dx < 0) dx += dSize; if (dz < 0) dz += dSize;
     cb.detailOffset = { (float)dx, (float)dz };
+    // ----------------------------------------------------------------------
 
     SM::Vector3 vSun = sunDir; vSun.Normalize();
     cb.sunDir = vSun;
@@ -200,26 +194,28 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, const SM::Ma
     cb.ambInt = m_Settings.ambientIntensity;
     cb.cAmbBot = { m_Settings.ambBot[0], m_Settings.ambBot[1], m_Settings.ambBot[2] };
 
-    // --- 1. RAYMARCH PASS (do Half-Res) ---
     std::vector<RHITexture*> halfTargets = { m_texHalfRes.get() };
     rhi->SetMRTTargets(halfTargets, nullptr);
     float clearZero[4] = { 0,0,0,0 };
     rhi->ClearRenderTarget(m_texHalfRes.get(), clearZero);
 
     rhi->SetPipeline(m_graphicsRaymarch.get());
-    rhi->SetGlobalUniforms(computeUniforms, &cb, sizeof(CloudCB)); // Nahrání bufferu
+    rhi->SetGlobalUniforms(globalUniforms, &cb, sizeof(CloudCB));
 
-    // Namapování SRV textur
     rhi->SetTexture(m_texShapeNoise.get(), 0);
     rhi->SetTexture(m_texDetailNoise.get(), 1);
-    rhi->SetTexture(posTexture, 2); // Z enginu (Hloubka)
+    rhi->SetTexture(posTexture, 2);
     rhi->SetTexture(m_texWeatherMap.get(), 3);
 
-    // Kreslení fullscreen quadu (3 vertexy)
     rhi->Draw(nullptr, 3);
 
-    // --- 2. UPSCALE PASS (do Main Targetu) ---
-    rhi->SetMainPassTarget();
+    if (renderTarget) {
+        std::vector<RHITexture*> rts = { renderTarget };
+        rhi->SetMRTTargets(rts, nullptr);
+    }
+    else {
+        rhi->SetMainPassTarget();
+    }
 
     rhi->SetPipeline(m_graphicsUpscale.get());
     rhi->SetTexture(m_texHalfRes.get(), 0);
@@ -227,7 +223,6 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, const SM::Ma
 
     rhi->Draw(nullptr, 3);
 }
-
 void VolumetricClouds::DrawDebug() {
     ImGui::Begin("Cloud Settings");
     ImGui::SetWindowFontScale(1.2f);
@@ -243,9 +238,6 @@ void VolumetricClouds::DrawDebug() {
             regen |= ImGui::SliderFloat("Storminess", &m_WeatherGen.storminess, 0.0f, 1.0f);
             regen |= ImGui::SliderFloat("Density Var", &m_WeatherGen.densityVar, 0.0f, 1.0f);
             regen |= ImGui::SliderFloat("Height Var", &m_WeatherGen.heightVar, 0.0f, 1.0f);
-
-            // Pokud máš v UI pøístup k RHI, mùžeš mapu regenerovat:
-            // if (ImGui::Button("Regenerate") || regen) GenerateWeatherMap(rhi);
             ImGui::EndTabItem();
         }
 

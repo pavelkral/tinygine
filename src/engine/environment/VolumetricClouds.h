@@ -3,14 +3,15 @@
 #include "pch/Pch.h"
 #include "engine/EngineDependencies.h"
 
-// Musí být zarovnáno na násobky 16/256 bytù pro DX12
+// Pøesnì 512 bytù pro DX12 RingBuffer
 struct CloudCB {
     SM::Vector4 camForward;
     SM::Vector4 camRight;
     SM::Vector4 camUp;
-    SM::Vector3 camPosRel; float timeSeconds;
-    SM::Vector3 sunDir; float planetRadius;
+    SM::Vector3 camPosAbs; float timeSeconds;
+    SM::Vector3 sunDir;    float planetRadius;
 
+    // Precizní CPU offsety pro fixaci mrakù na svìtových souøadnicích
     SM::Vector2 weatherOffset;
     SM::Vector2 shapeOffset;
     SM::Vector2 detailOffset;
@@ -22,17 +23,14 @@ struct CloudCB {
     SM::Vector4 layerParams;
     SM::Vector4 lightParams;
 
-    SM::Vector3 cSun; float sunInt;
+    SM::Vector3 cSun;    float sunInt;
     SM::Vector3 cAmbTop; float ambInt;
     SM::Vector3 cAmbBot; float pad1;
 
     SM::Matrix invProj;
 
-    // --- NOVÉ (Pro G-Buffer výpoèet) ---
-    SM::Vector3 camPosAbs; float pad2;
-
-    // Padding do celkových 512 bytù
-    float padding[8];
+    // Pøesnì 76 floatù (304 bytù) zarovná celou strukturu na dokonalých 512 bytù
+    float padding[76];
 };
 
 class VolumetricClouds {
@@ -84,9 +82,9 @@ public:
         float densityVar = 0.75f;
         float heightVar = 0.50f;
     } m_WeatherGen;
-    bool m_isNoiseGenerated = false;
+
     bool Init(RHI* rhi);
-    void Render(RHI* rhi, RHIBuffer* computeUniforms, const SM::Matrix& view, const SM::Matrix& proj, const SM::Vector3& camPosWorld, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture);
+    void Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, const SM::Vector3& camPosWorld, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget);
     void DrawDebug();
 
 private:
@@ -100,9 +98,9 @@ private:
     std::shared_ptr<RHITexture> m_texWeatherMap;
     std::shared_ptr<RHITexture> m_texHalfRes;
 
-    void GenerateWeatherMap(RHI* rhi);
+    bool m_isNoiseGenerated = false;
 
-    // CPU Noise pomocné funkce pro Weather Mapu
+    void GenerateWeatherMap(RHI* rhi);
     int Wrap(int v, int period);
     float PRandPeriodic(int x, int y, int pX, int pY, int seed);
     float TileableValueNoise(float x, float y, int pW, int pH, int seed);

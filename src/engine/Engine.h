@@ -80,7 +80,7 @@ private:
     std::unique_ptr<Skybox> m_skybox;
     std::unique_ptr<Atmosphere> m_atmosphere;
     std::unique_ptr<VolumetricClouds> m_Clouds;
-    std::shared_ptr<RHIBuffer> m_cloudUniformBuffer;
+
     
     FpsCamera m_camera;
 
