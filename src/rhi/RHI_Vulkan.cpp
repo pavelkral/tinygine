@@ -1235,7 +1235,18 @@ RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
         colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
         colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    } else {
+    }
+    else if (config.enableBlend) {
+        // --- NOVÉ (Pro Cloud Upscale) ---
+        colorBlendAttachment.blendEnable = VK_TRUE;
+        colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    else {
         colorBlendAttachment.blendEnable = VK_FALSE;
     }
     colorBlendAttachment.colorWriteMask = 0xF;
@@ -1592,7 +1603,54 @@ RHI_Vulkan::CreateTexture(const std::wstring &path) {
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     return t;
 }
+std::shared_ptr<RHITexture> RHI_Vulkan::CreateUAVTexture3D(int w, int h, int depth, int format) {
+    auto t = std::make_shared<VKTexture>();
+    t->width = w;
+    t->height = h;
 
+    VkFormat fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
+    if (format == 0) fmt = VK_FORMAT_R8G8B8A8_UNORM;
+
+    VkImageCreateInfo imageInfo = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    imageInfo.imageType = VK_IMAGE_TYPE_3D; // MUSÍ BÝT 3D
+    imageInfo.format = fmt;
+    imageInfo.extent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), static_cast<uint32_t>(depth) }; // TADY JE DEPTH
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    vmaCreateImage(allocator, &imageInfo, &allocInfo, &t->image, &t->alloc, nullptr);
+
+    SingleTimeCommand([&](VkCommandBuffer c) {
+        VkImageMemoryBarrier barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.image = t->image;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        });
+
+    VkImageViewCreateInfo viewInfo = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    viewInfo.image = t->image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D; // MUSÍ BÝT 3D
+    viewInfo.format = fmt;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &viewInfo, nullptr, &t->view);
+
+    t->imageInfo = { mainSampler, t->view, VK_IMAGE_LAYOUT_GENERAL };
+    t->uavInfo = { mainSampler, t->view, VK_IMAGE_LAYOUT_GENERAL };
+    return t;
+}
 std::shared_ptr<RHITexture>
 RHI_Vulkan::CreateDDSTexture(const std::wstring &path) {
     std::string pStr(path.begin(), path.end());

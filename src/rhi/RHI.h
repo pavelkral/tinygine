@@ -55,6 +55,7 @@ public:
     // COMPUTE
     virtual std::shared_ptr<RHIPipeline> CreateComputePipeline(const std::wstring& csPath) = 0;
     virtual std::shared_ptr<RHITexture> CreateUAVTexture(int width, int height, int format = 0) = 0;
+    virtual std::shared_ptr<RHITexture> CreateUAVTexture3D(int width, int height, int depth, int format = 0) = 0;
     virtual void SetComputePipeline(RHIPipeline* pipeline) = 0;
     virtual void SetComputeUniforms(RHIBuffer* buffer, const void* data, size_t size, int slot) = 0;
     virtual void SetComputeTextureSRV(RHITexture* texture, int slot) = 0;

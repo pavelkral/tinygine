@@ -1,6 +1,6 @@
 #include "rhi/RHI_DX12.h"
 #include "engine/EngineDependencies.h"
-
+#include "rhi/utils/ShaderCompiler.h"
 void RHI_DX12::Sync() {
     fVal++;
     queue->Signal(fence.Get(), fVal);
@@ -1102,32 +1102,22 @@ void RHI_DX12::SetPushConstants(const void *data, size_t size) {
 std::shared_ptr<RHIPipeline>
 RHI_DX12::CreatePipeline(const PipelineConfig &config) {
     auto p = std::make_shared<DX12Pipeline>();
-    ComPtr<ID3DBlob> vs, ps, err;
 
-    HRESULT hrVS = D3DCompileFromFile(config.vsPath.c_str(), nullptr,
-                                      D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain",
-                                      "vs_5_0", 0, 0, &vs, &err);
-    if (FAILED(hrVS) || !vs) {
-        std::string errMsg =
-            err ? (char *)err->GetBufferPointer() : "File not found!";
-        MessageBoxA(0, errMsg.c_str(), "DX12: Vertex Shader Error",
-                    MB_OK | MB_ICONERROR);
+    // 1. Kompilace Vertex Shaderu pøes moderní DXC
+    auto vsBlob = ShaderCompiler::CompileDX12(config.vsPath, "VSMain", "vs_6_0");
+    if (!vsBlob) {
+        // Pokud selže, vracíme p. (MessageBox s chybou už vyskoèil uvnitø CompileDX12)
         return p;
     }
 
+    // 2. Kompilace Pixel Shaderu (pokud je zadán)
+    ComPtr<IDxcBlob> psBlob = nullptr;
     if (!config.psPath.empty()) {
-        HRESULT hrPS = D3DCompileFromFile(config.psPath.c_str(), nullptr,
-                                          D3D_COMPILE_STANDARD_FILE_INCLUDE,
-                                          "PSMain", "ps_5_0", 0, 0, &ps, &err);
-        if (FAILED(hrPS) || !ps) {
-            std::string errMsg =
-                err ? (char *)err->GetBufferPointer() : "File not found!";
-            MessageBoxA(0, errMsg.c_str(), "DX12: Pixel Shader Error",
-                        MB_OK | MB_ICONERROR);
+        psBlob = ShaderCompiler::CompileDX12(config.psPath, "PSMain", "ps_6_0");
+        if (!psBlob) {
             return p;
         }
     }
-
     // Create Root Signature (Maps shaders to VRAM)
     D3D12_DESCRIPTOR_RANGE ranges[8];
     for (int i = 0; i < 8; i++)
@@ -1222,9 +1212,10 @@ RHI_DX12::CreatePipeline(const PipelineConfig &config) {
         gps.InputLayout = {ied.data(), (UINT)ied.size()};
 
     gps.pRootSignature = p->rs.Get();
-    gps.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
-    if (ps)
-        gps.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+    gps.VS = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
+    if (psBlob) {
+        gps.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
+    }
 
     gps.RasterizerState = {D3D12_FILL_MODE_SOLID, D3D12_CULL_MODE_BACK};
     gps.RasterizerState.CullMode = config.cullMode == CullMode::None
@@ -1252,13 +1243,25 @@ RHI_DX12::CreatePipeline(const PipelineConfig &config) {
         rtBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
         rtBlend.DestBlendAlpha = D3D12_BLEND_ZERO;
         rtBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    }
+    else if (config.enableBlend) {
+        // --- NOVÉ (Pro Cloud Upscale) ---
+        rtBlend.BlendEnable = TRUE;
+        rtBlend.SrcBlend = D3D12_BLEND_ONE;
+        rtBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        rtBlend.BlendOp = D3D12_BLEND_OP_ADD;
+        rtBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rtBlend.DestBlendAlpha = D3D12_BLEND_ZERO;
+        rtBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+ 
     } else {
         rtBlend.BlendEnable = FALSE;
     }
+
     rtBlend.LogicOpEnable = FALSE;
     rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    gps.NumRenderTargets = ps ? config.numRenderTargets : 0;
+    gps.NumRenderTargets = psBlob ? config.numRenderTargets : 0;
     for (int i = 0; i < 8; i++)
         gps.RTVFormats[i] = DXGI_FORMAT_UNKNOWN;
 
@@ -1340,26 +1343,21 @@ void RHI_DX12::DrawIndexedInstanced(RHIBuffer *vb, RHIBuffer *ib,
     cmd->DrawIndexedInstanced(indexCount, instanceCount, 0, 0, instanceOffset);
 }
 
-std::shared_ptr<RHIPipeline>
-RHI_DX12::CreateComputePipeline(const std::wstring &csPath) {
+std::shared_ptr<RHIPipeline> RHI_DX12::CreateComputePipeline(const std::wstring& csPath) {
     auto p = std::make_shared<DX12Pipeline>();
-    ComPtr<ID3DBlob> cs, err;
 
-    if (FAILED(D3DCompileFromFile(csPath.c_str(), nullptr,
-                                  D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSMain",
-                                  "cs_5_0", 0, 0, &cs, &err))) {
-        return nullptr;
-    }
+    // Využití naší nové tøídy s moderním DXC kompilátorem
+    auto csBlob = ShaderCompiler::CompileDX12(csPath, "CSMain", "cs_6_0");
+    if (!csBlob) return nullptr; // Pokud kompilace selže, nepokraèujeme!
 
     p->rs = computeRS;
     D3D12_COMPUTE_PIPELINE_STATE_DESC cpsd = {};
     cpsd.pRootSignature = p->rs.Get();
-    cpsd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
+    cpsd.CS = { csBlob->GetBufferPointer(), csBlob->GetBufferSize() };
     dev->CreateComputePipelineState(&cpsd, IID_PPV_ARGS(&p->pso));
 
     return p;
 }
-
 std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture(int w_in, int h_in,
                                                        int format) {
     auto t = std::make_shared<DX12Texture>();
@@ -1463,7 +1461,59 @@ void RHI_DX12::ComputeBarrier(RHITexture *uavTexture) {
     rb.UAV.pResource = dx->res.Get();
     cmd->ResourceBarrier(1, &rb);
 }
+std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture3D(int w_in, int h_in, int depth_in, int format) {
+    auto t = std::make_shared<DX12Texture>();
+    t->width = w_in;
+    t->height = h_in;
 
+    DXGI_FORMAT fmt = (format == 1) ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    D3D12_RESOURCE_DESC d = {};
+    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D
+    d.Width = w_in;
+    d.Height = h_in;
+    d.DepthOrArraySize = depth_in; // U 3D textury je Depth zde
+    d.MipLevels = 1;
+    d.SampleDesc.Count = 1;
+    d.Format = fmt;
+    d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    D3D12_HEAP_PROPERTIES hp = { D3D12_HEAP_TYPE_DEFAULT };
+    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&t->res)))) {
+        return nullptr;
+    }
+    t->currentState = D3D12_RESOURCE_STATE_COMMON;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuH = srvH->GetCPUDescriptorHandleForHeapStart();
+    cpuH.ptr += sOff * sInc;
+
+    t->uavHandle = srvH->GetGPUDescriptorHandleForHeapStart();
+    t->uavHandle.ptr += sOff * sInc;
+    sOff++;
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC ud = {};
+    ud.Format = fmt;
+    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D
+    ud.Texture3D.MipSlice = 0;
+    ud.Texture3D.FirstWSlice = 0;
+    ud.Texture3D.WSize = depth_in;
+    dev->CreateUnorderedAccessView(t->res.Get(), nullptr, &ud, cpuH);
+
+    cpuH = srvH->GetCPUDescriptorHandleForHeapStart();
+    cpuH.ptr += sOff * sInc;
+    t->srvHandle = srvH->GetGPUDescriptorHandleForHeapStart();
+    t->srvHandle.ptr += sOff * sInc;
+    sOff++;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+    sd.Format = fmt;
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture3D.MipLevels = 1;
+    dev->CreateShaderResourceView(t->res.Get(), &sd, cpuH);
+
+    return t;
+}
 void RHI_DX12::SetComputeBufferUAV(RHIBuffer *buffer, int slot) {
     if (!buffer)
         return;

@@ -105,6 +105,7 @@ public:
     CreateComputePipeline(const std::wstring &csPath) override;
     std::shared_ptr<RHITexture> CreateUAVTexture(int w_in, int h_in,
                                                  int format = 0) override;
+    std::shared_ptr<RHITexture> CreateUAVTexture3D(int w_in, int h_in, int depth_in, int format = 0) override;
     void SetComputePipeline(RHIPipeline *p) override;
     void SetComputeUniforms(RHIBuffer *b, const void *d, size_t s,
                             int slot) override;

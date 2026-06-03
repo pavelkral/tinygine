@@ -179,7 +179,9 @@ void Engine::LoadResourcesAndScene() {
 
 	m_skybox = std::make_unique<Skybox>(); m_skybox->Init(m_rhi.get(), L"assets/textures/ibl/skybox.dds");
 	m_atmosphere = std::make_unique<Atmosphere>(); m_atmosphere->Init(m_rhi.get());
-
+	m_cloudUniformBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, 512);
+	m_Clouds = std::make_unique<VolumetricClouds>();
+	m_Clouds->Init(m_rhi.get());
 	PipelineConfig lineCfg; lineCfg.vsPath = L"shaders/rhi/line.vert.hlsl"; lineCfg.psPath = L"shaders/rhi/line.frag.hlsl"; lineCfg.topology = Topology::LineList; lineCfg.cullMode = CullMode::None; lineCfg.depthTest = true; lineCfg.depthWrite = false;
 	m_linePipeline = m_rhi->CreatePipeline(lineCfg);
 	m_lineBuffer = m_rhi->CreateBuffer(BufferType::Vertex, nullptr, 2000000 * sizeof(Vertex));
@@ -690,6 +692,20 @@ void Engine::OnRender() {
 	else {
 		if (m_skybox) m_skybox->Render(m_rhi.get(), m_globalBuffer.get(), gData);
 	}
+
+	if (m_enableClouds && m_Clouds) {
+		ZoneScopedNC("Draw Clouds", 0xFFFFFF);
+
+		float time = (float)ImGui::GetTime();
+		SM::Vector3 sunDir = { dirLightDir.x, dirLightDir.y, dirLightDir.z};
+		SM::Vector3 camPos = { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z };
+		SM::Matrix smView(view); SM::Matrix smProj(proj);
+
+		// POSÍLÁME m_rtPos (G-Buffer) MÍSTO HLOUBKY!
+		m_Clouds->Render(m_rhi.get(), m_cloudUniformBuffer.get(), smView, smProj, camPos, sunDir, time, m_rtPos.get());
+	}
+	// ------------------------------
+
 	for (const auto& obj : m_sceneManager.m_objects) {
 		if (auto psc = obj->GetComponent<ParticleSystemComponent>()) psc->Render(m_globalBuffer.get(), gData);
 	}
@@ -1259,6 +1275,7 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 
 	ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Environment");
 	ImGui::Checkbox("Physically Based Sky", &m_enablePhysicallyBasedSky);
+
 	ImGui::Separator();
 	ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Ambient Occlusion");
 	ImGui::Checkbox("Enable SSAO", &m_enableSSAO);
@@ -1276,6 +1293,10 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	if (m_enablePhysicallyBasedSky && m_atmosphere) {
 		m_atmosphere->DrawDebug();
 	}
+	if (m_enableClouds && m_Clouds) {
+		m_Clouds->DrawDebug();
+	}
+
 	ImGui::Begin("Inspector");
 	if (m_sceneManager.m_selectedObject) {
 		char nameBuf[128];

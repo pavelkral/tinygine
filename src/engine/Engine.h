@@ -1,7 +1,7 @@
 #pragma once
 
 #include "engine/EngineDependencies.h"
-
+#include "engine/environment/VolumetricClouds.h"
 /// ///////////////////////////////////////////////////////////////////////////
 /// --- ENGINE class ---
 /// ///////////////////////////////////////////////////////////////////////////
@@ -75,8 +75,13 @@ private:
     SimState m_simState = SimState::Stopped;
     bool m_cameraActive = false;
     bool m_enablePhysicallyBasedSky = true;
+    bool m_enableClouds = true;
+
     std::unique_ptr<Skybox> m_skybox;
     std::unique_ptr<Atmosphere> m_atmosphere;
+    std::unique_ptr<VolumetricClouds> m_Clouds;
+    std::shared_ptr<RHIBuffer> m_cloudUniformBuffer;
+    
     FpsCamera m_camera;
 
     ImGui::FileBrowser m_loadDialog;
