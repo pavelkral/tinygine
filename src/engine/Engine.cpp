@@ -539,9 +539,8 @@ void Engine::OnRender() {
 		// 1. Získáme směr toku světla (dolů na zem)
 	SM::Vector3 lightTravelDir(dirLightDir.x, dirLightDir.y, dirLightDir.z);
 	lightTravelDir.Normalize();
-
-	// 2. Získáme směr K SLUNCI (nahoru do nebe)
-	SM::Vector3 sunDirToSun = lightTravelDir;
+	// 2. Vektor K SLUNCI (Zdola nahoru k obloze)
+	SM::Vector3 sunDirToSun = -lightTravelDir;
 
 	GlobalData gData = {};
 	gData.view = XMMatrixTranspose(view);
@@ -574,7 +573,7 @@ void Engine::OnRender() {
 	// --- OPRAVA: ODESLÁNÍ DO ATMOSFÉRY ---
 	if (m_enablePhysicallyBasedSky && m_atmosphere) {
 		// TADY BYLA CHYBA! Musíme poslat sunDirToSun (ukazuje na oblohu), jinak se disk nakreslí pod zem!
-		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), -sunDirToSun, { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z });
+		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), lightTravelDir, { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z });
 	}
 	// Počítáme atmosféru pouze tehdy, je-li zapnutá
 	
@@ -1313,6 +1312,7 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Checkbox("SSR (Reflections)", &m_enableSSR);
 	ImGui::Checkbox("Bloom (Glow)", &m_enableBloom);
 	ImGui::Checkbox("Vignette", &m_enableVignette);
+	ImGui::Checkbox("Enable Volumetric Clouds", &m_enableClouds);
 	ImGui::End();
 
 	if (m_enablePhysicallyBasedSky && m_atmosphere) {
