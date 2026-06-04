@@ -75,7 +75,7 @@ private:
     SimState m_simState = SimState::Stopped;
     bool m_cameraActive = false;
     bool m_enablePhysicallyBasedSky = true;
-    bool m_enableClouds = true;
+    bool m_enableClouds = false;
 
     std::unique_ptr<Skybox> m_skybox;
     std::unique_ptr<Atmosphere> m_atmosphere;

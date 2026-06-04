@@ -1,6 +1,6 @@
 #include "rhi/RHI_Vulkan.h"
 #include "engine/EngineDependencies.h"
-
+#include "rhi/utils/ShaderCompiler.h"
 VKAPI_ATTR VkBool32 VKAPI_CALL RHI_Vulkan::VulkanDebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -986,10 +986,13 @@ RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
     auto p = std::make_shared<VKPipeline>();
     p->isSkinned = config.isSkinned;
 
-    auto vS = CompileHLSL(config.vsPath, "VSMain", "vs_6_0");
-    std::vector<uint32_t> pS;
+    auto vS = ShaderCompiler::CompileVulkan(config.vsPath, "VSMain", "vs_6_0");
+    if (vS.empty()) return p;
+
+    // 2. ZMĚNA: Používáme std::vector<uint8_t> místo uint32_t
+    std::vector<uint8_t> pS;
     if (!config.psPath.empty()) {
-        pS = CompileHLSL(config.psPath, "PSMain", "ps_6_0");
+        pS = ShaderCompiler::CompileVulkan(config.psPath, "PSMain", "ps_6_0");
     }
 
     // Define generic layout mapping for modern PBR engine
@@ -1039,39 +1042,35 @@ RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
     pipeLayoutInfo.pPushConstantRanges = &pcr;
     vkCreatePipelineLayout(device, &pipeLayoutInfo, nullptr, &p->layout);
 
-    // Shader modules
     VkShaderModule vertModule = VK_NULL_HANDLE;
     VkShaderModule fragModule = VK_NULL_HANDLE;
 
-    VkShaderModuleCreateInfo vertModInfo = {
-                                            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    vertModInfo.codeSize = vS.size() * 4;
-    vertModInfo.pCode = vS.data();
+    VkShaderModuleCreateInfo vertModInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+    // 3. ZMĚNA: Velikost je nyní v bytech (už ŽÁDNÉ násobení * 4!)
+    vertModInfo.codeSize = vS.size();
+    // 4. ZMĚNA: Vulkan API stále vyžaduje uint32_t*, takže musíme byty bezpečně přetypovat
+    vertModInfo.pCode = reinterpret_cast<const uint32_t*>(vS.data());
     vkCreateShaderModule(device, &vertModInfo, nullptr, &vertModule);
 
     std::vector<VkPipelineShaderStageCreateInfo> stages;
-    VkPipelineShaderStageCreateInfo vertStage = {
-                                                 VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    VkPipelineShaderStageCreateInfo vertStage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
     vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
     vertStage.module = vertModule;
     vertStage.pName = "VSMain";
     stages.push_back(vertStage);
 
     if (!pS.empty()) {
-        VkShaderModuleCreateInfo fragModInfo = {
-                                                VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        fragModInfo.codeSize = pS.size() * 4;
-        fragModInfo.pCode = pS.data();
+        VkShaderModuleCreateInfo fragModInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+        fragModInfo.codeSize = pS.size(); // OPĚT: Žádné * 4 !
+        fragModInfo.pCode = reinterpret_cast<const uint32_t*>(pS.data()); // Přetypování
         vkCreateShaderModule(device, &fragModInfo, nullptr, &fragModule);
 
-        VkPipelineShaderStageCreateInfo fragStage = {
-                                                     VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        VkPipelineShaderStageCreateInfo fragStage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
         fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
         fragStage.module = fragModule;
         fragStage.pName = "PSMain";
         stages.push_back(fragStage);
     }
-
     // Vertex Input Configuration
     std::vector<VkVertexInputBindingDescription> bindDescs;
     std::vector<VkVertexInputAttributeDescription> attrDescs;
@@ -1932,42 +1931,42 @@ void RHI_Vulkan::DrawIndexedInstanced(RHIBuffer *vb, RHIBuffer *ib,
                      instanceOffset);
 }
 
-std::shared_ptr<RHIPipeline>
-RHI_Vulkan::CreateComputePipeline(const std::wstring &csPath) {
-    auto p = std::make_shared<VKPipeline>();
-    auto cS = CompileHLSL(csPath, "CSMain", "cs_6_0");
 
-    if (cS.empty())
-        return nullptr;
+std::shared_ptr<RHIPipeline> RHI_Vulkan::CreateComputePipeline(const std::wstring& csPath) {
+    auto p = std::make_shared<VKPipeline>();
+
+    // ZMĚNA: Voláme náš nový Compiler
+    auto cS = ShaderCompiler::CompileVulkan(csPath, "CSMain", "cs_6_0");
+    if (cS.empty()) return nullptr; // Elegantní selhání
+
     p->descLayout = computeDescLayout;
 
-    VkPipelineLayoutCreateInfo pipeLayoutInfo = {
-                                                 VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    VkPipelineLayoutCreateInfo pipeLayoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     pipeLayoutInfo.setLayoutCount = 1;
     pipeLayoutInfo.pSetLayouts = &p->descLayout;
     vkCreatePipelineLayout(device, &pipeLayoutInfo, nullptr, &p->layout);
 
     VkShaderModule cM;
-    VkShaderModuleCreateInfo smi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    smi.codeSize = cS.size() * 4;
-    smi.pCode = cS.data();
+    VkShaderModuleCreateInfo smi = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+
+    // ZMĚNA: Bezpečné předání dat do Vulkanu
+    smi.codeSize = cS.size(); // Bez * 4
+    smi.pCode = reinterpret_cast<const uint32_t*>(cS.data()); // Přetypování
+
     vkCreateShaderModule(device, &smi, nullptr, &cM);
 
-    VkComputePipelineCreateInfo cpi = {
-                                       VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    VkComputePipelineCreateInfo cpi = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
     cpi.layout = p->layout;
     cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     cpi.stage.module = cM;
     cpi.stage.pName = "CSMain";
 
-    vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr,
-                             &p->pipeline);
+    vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &p->pipeline);
     vkDestroyShaderModule(device, cM, nullptr);
 
     return p;
 }
-
 std::shared_ptr<RHITexture> RHI_Vulkan::CreateUAVTexture(int w, int h,
                                                          int format) {
     auto t = std::make_shared<VKTexture>();

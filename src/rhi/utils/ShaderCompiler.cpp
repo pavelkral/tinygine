@@ -107,15 +107,19 @@ std::vector<uint8_t> ShaderCompiler::CompileVulkan(const std::wstring& path, con
     MultiByteToWideChar(CP_UTF8, 0, entry, -1, wEntry, 64);
     MultiByteToWideChar(CP_UTF8, 0, target, -1, wTarget, 64);
 
-    // INSTRUKCE PRO VULKAN (SPIR-V)
+    //  VULKAN (SPIR-V) + SHIFs + ENTRY
     std::vector<LPCWSTR> args = {
         path.c_str(), L"-E", wEntry, L"-T", wTarget,
-        L"-spirv", L"-fspv-target-env=vulkan1.1"
+        L"-spirv", L"-fspv-target-env=vulkan1.1",
+        L"-fvk-b-shift", L"0",  L"0",
+        L"-fvk-u-shift", L"15", L"0",
+        L"-fvk-t-shift", L"3",  L"0",
+        L"-fvk-s-shift", L"11", L"0",
+        L"-D", L"VULKAN"
     };
 
     ComPtr<IDxcResult> results;
     compiler->Compile(&sourceBuffer, args.data(), (UINT32)args.size(), includeHandler.Get(), IID_PPV_ARGS(&results));
-
     ComPtr<IDxcBlobUtf8> errors;
     results->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
     if (errors && errors->GetStringLength() > 0) {

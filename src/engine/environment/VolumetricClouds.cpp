@@ -1,7 +1,9 @@
 #include "engine/environment/VolumetricClouds.h"
 #include "stb_image_write.h" 
 
-// ... Pomocné matematické funkce (Wrap, PRandPeriodic, TileableValueNoise, TileableFBM, SmoothStep) zùstávají stejné ...
+// =====================================================================
+// POMOCNÉ MATEMATICKÉ FUNKCE PRO ŠUM
+// =====================================================================
 int VolumetricClouds::Wrap(int v, int period) { return (v % period + period) % period; }
 
 float VolumetricClouds::PRandPeriodic(int x, int y, int pX, int pY, int seed) {
@@ -44,6 +46,10 @@ float VolumetricClouds::SmoothStep(float edge0, float edge1, float x) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+
+// =====================================================================
+// GENEROVÁNÍ MAPY POÈASÍ
+// =====================================================================
 void VolumetricClouds::GenerateWeatherMap(RHI* rhi) {
     int w = 512, h = 512;
     std::vector<uint8_t> data(w * h * 4);
@@ -78,7 +84,6 @@ void VolumetricClouds::GenerateWeatherMap(RHI* rhi) {
         }
     }
 
-    // Uložíme jako doèasný soubor a hned využijeme tvou RHI funkci
     std::string tempPath = "assets/textures/temp_weather.png";
     stbi_write_png(tempPath.c_str(), w, h, 4, data.data(), w * 4);
 
@@ -86,11 +91,15 @@ void VolumetricClouds::GenerateWeatherMap(RHI* rhi) {
     m_texWeatherMap = rhi->CreateTexture(wPath);
 }
 
+
+// =====================================================================
+// INICIALIZACE A LIFECYCLE
+// =====================================================================
 bool VolumetricClouds::Init(RHI* rhi) {
     if (!rhi) return false;
 
-    m_texShapeNoise = rhi->CreateUAVTexture3D(128, 128, 128);
-    m_texDetailNoise = rhi->CreateUAVTexture3D(64, 64, 64);
+    m_texShapeNoise = rhi->CreateUAVTexture3D(128, 128, 128, 1);
+    m_texDetailNoise = rhi->CreateUAVTexture3D(64, 64, 64, 1);
 
     m_csShapeNoise = rhi->CreateComputePipeline(L"shaders/clouds/cloud_shape.comp.hlsl");
     m_csDetailNoise = rhi->CreateComputePipeline(L"shaders/clouds/cloud_detail.comp.hlsl");
@@ -112,36 +121,46 @@ bool VolumetricClouds::Init(RHI* rhi) {
     upCfg.enableBlend = true;
     m_graphicsUpscale = rhi->CreatePipeline(upCfg);
 
-    int w, h;
-    rhi->GetSize(w, h);
-    m_texHalfRes = rhi->CreateRenderTarget(w / 2, h / 2, 0);
+    int w, h; rhi->GetSize(w, h);
+    OnResize(rhi, w, h);
 
     return true;
 }
-void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, const SM::Vector3& camPosWorld, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget) {
-    if (!m_texHalfRes) return;
 
-    if (!m_isNoiseGenerated) {
-        struct NoiseParams { uint32_t baseFreq; uint32_t seed; uint32_t pad0; uint32_t pad1; };
+void VolumetricClouds::OnResize(RHI* rhi, int w, int h) {
+    m_texHalfRes = rhi->CreateRenderTarget(w / 2, h / 2, 0);
+}
 
-        if (m_csShapeNoise) {
-            NoiseParams sp = { 4, 1337, 0, 0 };
-            rhi->SetComputePipeline(m_csShapeNoise.get());
-            rhi->SetComputeUniforms(computeUniforms, &sp, sizeof(NoiseParams), 0);
-            rhi->SetComputeTextureUAV(m_texShapeNoise.get(), 0);
-            rhi->DispatchCompute(128 / 8, 128 / 8, 128 / 8);
-            rhi->ComputeBarrier(m_texShapeNoise.get());
-        }
-        if (m_csDetailNoise) {
-            NoiseParams dp = { 4, 4242, 0, 0 };
-            rhi->SetComputePipeline(m_csDetailNoise.get());
-            rhi->SetComputeUniforms(computeUniforms, &dp, sizeof(NoiseParams), 0);
-            rhi->SetComputeTextureUAV(m_texDetailNoise.get(), 0);
-            rhi->DispatchCompute(64 / 8, 64 / 8, 64 / 8);
-            rhi->ComputeBarrier(m_texDetailNoise.get());
-        }
-        m_isNoiseGenerated = true;
+void VolumetricClouds::GenerateNoise(RHI* rhi, RHIBuffer* computeUniforms) {
+    if (m_isNoiseGenerated) return;
+
+    struct NoiseParams { uint32_t baseFreq; uint32_t seed; uint32_t pad0; uint32_t pad1; };
+
+    if (m_csShapeNoise) {
+        NoiseParams sp = { 4, 1337, 0, 0 };
+        rhi->SetComputePipeline(m_csShapeNoise.get());
+        rhi->SetComputeUniforms(computeUniforms, &sp, sizeof(NoiseParams), 0);
+        rhi->SetComputeTextureUAV(m_texShapeNoise.get(), 0);
+        rhi->DispatchCompute(128 / 8, 128 / 8, 128 / 8);
+        rhi->ComputeBarrier(m_texShapeNoise.get());
     }
+    if (m_csDetailNoise) {
+        NoiseParams dp = { 4, 4242, 0, 0 };
+        rhi->SetComputePipeline(m_csDetailNoise.get());
+        rhi->SetComputeUniforms(computeUniforms, &dp, sizeof(NoiseParams), 0);
+        rhi->SetComputeTextureUAV(m_texDetailNoise.get(), 0);
+        rhi->DispatchCompute(64 / 8, 64 / 8, 64 / 8);
+        rhi->ComputeBarrier(m_texDetailNoise.get());
+    }
+    m_isNoiseGenerated = true;
+}
+
+
+// =====================================================================
+// RENDER (S DOUBLE PØESNOSTÍ)
+// =====================================================================
+void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, double camX, double camY, double camZ, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget) {
+    if (!m_texHalfRes) return;
 
     CloudCB cb = {};
     SM::Matrix invView = view.Invert();
@@ -149,7 +168,8 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     cb.camUp = { invView._21, invView._22, invView._23, 0.0f };
     cb.camForward = { invView._31, invView._32, invView._33, 0.0f };
 
-    cb.camPosAbs = { camPosWorld.x, camPosWorld.y, camPosWorld.z };
+    cb.camPosAbs = { (float)camX, (float)camY, (float)camZ };
+    cb.camPosRel = { 0.0f, (float)camY, 0.0f };
     cb.timeSeconds = timeSeconds * m_Settings.timeScale;
     cb.planetRadius = m_Settings.planetRadius;
 
@@ -157,28 +177,28 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     int w, h; rhi->GetSize(w, h);
     cb.aspect = (float)w / (float)h;
 
-    // --- VÝPOÈET OFFSETÙ POMOCÍ DOUBLE (Zabrání pohybu mrakù s kamerou) ---
+    // --- VÝPOÈET OFFSETÙ POMOCÍ DOUBLE (Zabrání tøesení a pohybu mrakù s kamerou) ---
     double windDx = (double)cb.timeSeconds * m_Settings.windSpeedX;
     double windDz = (double)cb.timeSeconds * m_Settings.windSpeedZ;
 
     double wSize = (double)m_Settings.weatherMapSize;
-    double wx = fmod(camPosWorld.x + windDx, wSize);
-    double wz = fmod(camPosWorld.z + windDz, wSize);
+    double wx = fmod(camX + windDx, wSize);
+    double wz = fmod(camZ + windDz, wSize);
     if (wx < 0) wx += wSize; if (wz < 0) wz += wSize;
     cb.weatherOffset = { (float)wx, (float)wz };
 
     double sSize = (double)m_Settings.shapeNoiseSize;
-    double sx = fmod(camPosWorld.x + windDx, sSize);
-    double sz = fmod(camPosWorld.z + windDz, sSize);
+    double sx = fmod(camX + windDx, sSize);
+    double sz = fmod(camZ + windDz, sSize);
     if (sx < 0) sx += sSize; if (sz < 0) sz += sSize;
     cb.shapeOffset = { (float)sx, (float)sz };
 
     double dSize = (double)m_Settings.detailNoiseSize;
-    double dx = fmod(camPosWorld.x + windDx * 1.5, dSize);
-    double dz = fmod(camPosWorld.z + windDz * 1.5, dSize);
+    double dx = fmod(camX + windDx * 1.5, dSize);
+    double dz = fmod(camZ + windDz * 1.5, dSize);
     if (dx < 0) dx += dSize; if (dz < 0) dz += dSize;
     cb.detailOffset = { (float)dx, (float)dz };
-    // ----------------------------------------------------------------------
+    // ----------------------------------------------------
 
     SM::Vector3 vSun = sunDir; vSun.Normalize();
     cb.sunDir = vSun;
@@ -223,6 +243,11 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
 
     rhi->Draw(nullptr, 3);
 }
+
+
+// =====================================================================
+// DEBUG UI
+// =====================================================================
 void VolumetricClouds::DrawDebug() {
     ImGui::Begin("Cloud Settings");
     ImGui::SetWindowFontScale(1.2f);

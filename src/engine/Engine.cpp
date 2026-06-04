@@ -17,6 +17,7 @@ void Engine::RecreateRenderTargets() {
 	m_rtPingPong = m_rhi->CreateRenderTarget(w, h, 0);
 
 	m_ssaoParams.screenSize = { (float)w, (float)h };
+	if (m_Clouds) m_Clouds->OnResize(m_rhi.get(), w, h);
 }
 
 
@@ -535,12 +536,15 @@ void Engine::OnRender() {
 		lightView = XMMatrixLookToLH(XMLoadFloat3(&shadowPos), forwardVector, XMVectorSet(0, 1, 0, 0));
 	}
 
+	SM::Vector3 sunDirToSun = SM::Vector3(-dirLightDir.x, -dirLightDir.y, -dirLightDir.z);
+	sunDirToSun.Normalize();
+
 	// TOTO JE KLÍČOVÉ PRO ATMOSFÉRU A MRAKY: Potřebují vektor ukazující K SLUNCI!
 		// 1. Získáme směr toku světla (dolů na zem)
 	SM::Vector3 lightTravelDir(dirLightDir.x, dirLightDir.y, dirLightDir.z);
 	lightTravelDir.Normalize();
 	// 2. Vektor K SLUNCI (Zdola nahoru k obloze)
-	SM::Vector3 sunDirToSun = -lightTravelDir;
+	//SM::Vector3 sunDirToSun = -lightTravelDir;
 
 	GlobalData gData = {};
 	gData.view = XMMatrixTranspose(view);
@@ -568,12 +572,14 @@ void Engine::OnRender() {
 
 	m_rhi->BeginFrame();
 	
-
+	if (m_enableClouds && m_Clouds) {
+		m_Clouds->GenerateNoise(m_rhi.get(), m_computeUniformBuffer.get());
+	}
 
 	// --- OPRAVA: ODESLÁNÍ DO ATMOSFÉRY ---
 	if (m_enablePhysicallyBasedSky && m_atmosphere) {
 		// TADY BYLA CHYBA! Musíme poslat sunDirToSun (ukazuje na oblohu), jinak se disk nakreslí pod zem!
-		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), lightTravelDir, { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z });
+		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), sunDirToSun, { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z });
 	}
 	// Počítáme atmosféru pouze tehdy, je-li zapnutá
 	
@@ -888,14 +894,13 @@ void Engine::OnRender() {
 	}
 	if (m_enableClouds && m_Clouds) {
 		ZoneScopedNC("Draw Clouds", 0xFFFFFF);
-
 		float time = (float)ImGui::GetTime();
 		SM::Vector3 camPos = { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z };
 		SM::Matrix smView(view); SM::Matrix smProj(proj);
-
-		// Použijeme sunDirToSun!
-		m_Clouds->Render(m_rhi.get(), m_computeUniformBuffer.get(), m_globalBuffer.get(), smView, smProj, camPos, sunDirToSun, time, m_rtPos.get(), currentImage);
-	}
+		m_Clouds->Render(m_rhi.get(), m_computeUniformBuffer.get(), m_globalBuffer.get(), smView, smProj,
+			m_camera.pos.x, m_camera.pos.y, m_camera.pos.z, // syrové DOUBLE!
+			sunDirToSun, time, m_rtPos.get(), currentImage);
+}
 	m_rhi->SetMainPassTarget();
 	m_rhi->ClearRenderTarget(m_rhi->GetBackBuffer(), screenClear);
 
