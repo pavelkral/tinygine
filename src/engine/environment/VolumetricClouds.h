@@ -3,12 +3,12 @@
 #include "pch/Pch.h"
 #include "engine/EngineDependencies.h"
 
-// Pøesnì 512 bytù pro DX12 RingBuffer
+// Pøesnì 512 bytù pro DX12 RingBuffer (Identické s pùvodním FlightSimem)
 struct CloudCB {
     SM::Vector4 camForward;
     SM::Vector4 camRight;
     SM::Vector4 camUp;
-    SM::Vector3 camPosRel; float timeSeconds;
+    SM::Vector3 camPosAbs; float timeSeconds; // ZDE JE NYNÍ camPosAbs!
     SM::Vector3 sunDir;    float planetRadius;
 
     SM::Vector2 weatherOffset;
@@ -28,12 +28,10 @@ struct CloudCB {
 
     SM::Matrix invProj;
 
-    SM::Vector3 camPosAbs; float pad2;
-
-    // Pøesnì 44 floatù zarovná strukturu na dokonalých 512 bytù
-    float padding[44];
+    // Struktura zabírá pøesnì 288 bytù.
+    // Padujeme do 512 bytù (zbývá 224 bytù = 56 floatù).
+    float padding[56];
 };
-
 class VolumetricClouds {
 public:
     struct Settings {
@@ -86,10 +84,12 @@ public:
 
     bool Init(RHI* rhi);
 
-    // Nové èisté metody pro správu životního cyklu!
     void GenerateNoise(RHI* rhi, RHIBuffer* computeUniforms);
     void OnResize(RHI* rhi, int w, int h);
+
+    // Zmìnìná signatura: Pøijímá èisté double pro kameru
     void Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, double camX, double camY, double camZ, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget);
+
     void DrawDebug();
 
 private:

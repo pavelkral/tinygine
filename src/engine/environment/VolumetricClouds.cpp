@@ -107,7 +107,7 @@ bool VolumetricClouds::Init(RHI* rhi) {
     GenerateWeatherMap(rhi);
 
     PipelineConfig rayCfg;
-    rayCfg.vsPath = L"shaders/clouds/fullscreen.vert.hlsl";
+    rayCfg.vsPath = L"shaders/rhi/fullscreen.vert.hlsl";
     rayCfg.psPath = L"shaders/clouds/cloud_raymarch.frag.hlsl";
     rayCfg.cullMode = CullMode::None;
     rayCfg.depthTest = false;
@@ -156,9 +156,6 @@ void VolumetricClouds::GenerateNoise(RHI* rhi, RHIBuffer* computeUniforms) {
 }
 
 
-// =====================================================================
-// RENDER (S DOUBLE PØESNOSTÍ)
-// =====================================================================
 void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, double camX, double camY, double camZ, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget) {
     if (!m_texHalfRes) return;
 
@@ -168,8 +165,8 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     cb.camUp = { invView._21, invView._22, invView._23, 0.0f };
     cb.camForward = { invView._31, invView._32, invView._33, 0.0f };
 
+    // PERFEKTNÍ SHODA S HLSL PAMÌTÍ
     cb.camPosAbs = { (float)camX, (float)camY, (float)camZ };
-    cb.camPosRel = { 0.0f, (float)camY, 0.0f };
     cb.timeSeconds = timeSeconds * m_Settings.timeScale;
     cb.planetRadius = m_Settings.planetRadius;
 
@@ -177,7 +174,7 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     int w, h; rhi->GetSize(w, h);
     cb.aspect = (float)w / (float)h;
 
-    // --- VÝPOÈET OFFSETÙ POMOCÍ DOUBLE (Zabrání tøesení a pohybu mrakù s kamerou) ---
+    // --- VÝPOÈET OFFSETÙ POMOCÍ DOUBLE (Brání pohybu mrakù s kamerou) ---
     double windDx = (double)cb.timeSeconds * m_Settings.windSpeedX;
     double windDz = (double)cb.timeSeconds * m_Settings.windSpeedZ;
 
@@ -198,7 +195,7 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     double dz = fmod(camZ + windDz * 1.5, dSize);
     if (dx < 0) dx += dSize; if (dz < 0) dz += dSize;
     cb.detailOffset = { (float)dx, (float)dz };
-    // ----------------------------------------------------
+    // ------------------------------------------------------------------
 
     SM::Vector3 vSun = sunDir; vSun.Normalize();
     cb.sunDir = vSun;
@@ -214,6 +211,10 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     cb.ambInt = m_Settings.ambientIntensity;
     cb.cAmbBot = { m_Settings.ambBot[0], m_Settings.ambBot[1], m_Settings.ambBot[2] };
 
+    // Tvoje inverzní matice
+    cb.invProj = proj.Invert().Transpose();
+
+    // --- 1. RAYMARCH PASS ---
     std::vector<RHITexture*> halfTargets = { m_texHalfRes.get() };
     rhi->SetMRTTargets(halfTargets, nullptr);
     float clearZero[4] = { 0,0,0,0 };
@@ -229,6 +230,7 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
 
     rhi->Draw(nullptr, 3);
 
+    // --- 2. UPSCALE PASS ---
     if (renderTarget) {
         std::vector<RHITexture*> rts = { renderTarget };
         rhi->SetMRTTargets(rts, nullptr);
@@ -243,7 +245,6 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
 
     rhi->Draw(nullptr, 3);
 }
-
 
 // =====================================================================
 // DEBUG UI

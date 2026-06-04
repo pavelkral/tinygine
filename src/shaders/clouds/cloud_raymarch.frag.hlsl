@@ -5,12 +5,13 @@ Texture2D<float4> g_WeatherMap : register(t3);
 
 SamplerState g_Sampler : register(s0);
 
+// STRUKTURA NYNÍ PERFEKTNÌ LÍCUJE S C++!
 cbuffer CloudCB : register(b0)
 {
     float4 camForward;
     float4 camRight;
     float4 camUp;
-    float3 camPosAbs;
+    float3 camPosAbs; // PØESNÌ JAKO V C++
     float timeSeconds;
     float3 sunDir;
     float planetRadius;
@@ -32,6 +33,7 @@ cbuffer CloudCB : register(b0)
     float ambInt;
     float3 cAmbBot;
     float pad1;
+    
     float4x4 invProj;
 }
 
@@ -105,7 +107,6 @@ float HeightProfile(float h, float type)
     return lerp(p0, p1, f);
 }
 
-// "localPos" je pozice bodu od 0,0,0 v našem relativním raymarchingu
 float SampleDensity(float3 localPos, bool cheap)
 {
     float3 planetCenter = float3(0, -planetRadius - camPosAbs.y, 0);
@@ -120,7 +121,6 @@ float SampleDensity(float3 localPos, bool cheap)
     float h = saturate((dist - rMin) / max(1e-6, (rMax - rMin)));
 
     float weatherMapSize = shapeParams.z;
-    // Záchrana! Pøièteme náš CPU offset do X a Z souøadnic
     float2 weatherUV = (localPos.xz + weatherOffset) / weatherMapSize;
     float4 weatherData = g_WeatherMap.SampleLevel(g_Sampler, weatherUV, 0);
 
@@ -137,11 +137,17 @@ float SampleDensity(float3 localPos, bool cheap)
         return 0.0;
 
     float detailSize = layerParams.w;
-    float3 detailUV = float3(localPos.x + detailOffset.x, localPos.y + camPosAbs.y, localPos.z + detailOffset.y) / detailSize;
+    float3 detailPos = float3(
+        localPos.x + detailOffset.x + (timeSeconds * 20.0),
+        localPos.y + camPosAbs.y,
+        localPos.z + detailOffset.y + (timeSeconds * -10.0)
+    );
+    
+    float3 detailUV = detailPos / detailSize;
     float4 dN = g_DetailNoise.SampleLevel(g_Sampler, detailUV, 0);
     
     float erosionNoise = dN.r * 0.65 + dN.g * 0.35;
-    float turbulenceForce = typeParams.w * 300.0;
+    float turbulenceForce = 400.0;
     float3 warp = (dN.gba * 2.0 - 1.0) * turbulenceForce;
 
     float shapeSize = layerParams.z;
@@ -180,11 +186,15 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     float2 ndc = input.uv * 2.0 - 1.0;
     ndc.y *= -1.0;
 
-    float3 pixelWorldPos = g_PosMap.SampleLevel(g_Sampler, input.uv, 0).xyz;
+    // --- SPRÁVNÉ ÈTENÍ VZDÁLENOSTI Z G-BUFFERU ---
+    float4 pixelData = g_PosMap.SampleLevel(g_Sampler, input.uv, 0);
     float geomDist = 1e9;
-    if (dot(pixelWorldPos, pixelWorldPos) > 0.001)
+    
+    // Pokud pixel není prázdná obloha (0,0,0)
+    if (abs(pixelData.x) > 0.001 || abs(pixelData.y) > 0.001 || abs(pixelData.z) > 0.001)
     {
-        geomDist = length(pixelWorldPos - camPosAbs);
+        // Spoèítá skuteènou vzdálenost stìny/objektu od kamery
+        geomDist = length(pixelData.xyz - camPosAbs);
         if (geomDist > 60000.0)
             geomDist = 1e9;
     }
@@ -195,24 +205,51 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
 
     float3 rd = normalize(viewRay);
     
-    // RAYMARCHING ZAÈÍNÁ V 0,0,0 (LOKÁLNÍ PROSTOR KAMERY PRO BEZPEÈNOU 32-BIT MATEMATIKU)
+    // Záchrana pøesnosti: Lokální raymarching
     float3 ro = float3(0, 0, 0);
 
-    float3 planetCenter = float3(0, -planetRadius - camPosAbs.y, 0);
+    // --- NEPRÙSTØELNÁ LOGIKA OØEZU ---
+    float camHeight = planetRadius + camPosAbs.y;
+    float3 planetCenter = float3(0, -camHeight, 0);
     float rMin = planetRadius + layerParams.x;
     float rMax = planetRadius + layerParams.y;
 
     float2 tAtm = RaySphere(ro - planetCenter, rd, rMax);
     float2 tSrf = RaySphere(ro - planetCenter, rd, rMin);
 
-    float tStart = max(0.0, tAtm.x);
-    float tEnd = tAtm.y;
+    float tStart = 0.0;
+    float tEnd = 0.0;
 
-    if (tEnd <= 0.0)
+    if (tAtm.y < 0.0)
+        return float4(0, 0, 0, 0); // Díváme se úplnì do vesmíru
+
+    if (camHeight < rMin)
+    {
+        // KAMERA JE POD MRAKY (Zabraòuje renderování mrakù v zemi!)
+        if (tSrf.y < 0.0)
+            return float4(0, 0, 0, 0); // Díváme se do zemì
+        tStart = max(0.0, tSrf.y);
+        tEnd = tAtm.y;
+    }
+    else if (camHeight > rMax)
+    {
+        // KAMERA JE NAD MRAKY
+        if (tAtm.x < 0.0)
+            return float4(0, 0, 0, 0);
+        tStart = max(0.0, tAtm.x);
+        tEnd = (tSrf.x > 0.0) ? tSrf.x : tAtm.y;
+    }
+    else
+    {
+        // KAMERA JE UVNITØ MRAKÙ
+        tStart = 0.0;
+        tEnd = (tSrf.x > 0.0) ? tSrf.x : tAtm.y;
+    }
+
+    if (tEnd <= tStart)
         return float4(0, 0, 0, 0);
-    if (tSrf.x > 0.0 && tSrf.x < tEnd)
-        tEnd = tSrf.x;
 
+    // Oøez G-Bufferem
     if (tStart >= geomDist)
         return float4(0, 0, 0, 0);
     tEnd = min(tEnd, geomDist);
@@ -249,8 +286,8 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     [loop]
     for (int i = 0; i < steps; i++)
     {
-        float3 p = ro + rd * t; // P je lokální pozice od kamery!
-        float dens = SampleDensity(p, false); // Zde se na ni teprve aplikují offsety
+        float3 p = ro + rd * t;
+        float dens = SampleDensity(p, false);
 
         if (dens > 0.001)
         {
