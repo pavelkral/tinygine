@@ -150,7 +150,17 @@ void RHI_DX11::SetMRTTargets(std::vector<RHITexture *> targets,
         depthMap ? ((DX11Texture *)depthMap)->dsv.Get() : dsv.Get();
     ctx->OMSetRenderTargets((UINT)rtvs.size(), rtvs.data(), dsvLocal);
 
-    D3D11_VIEWPORT vp = {0, 0, (float)width, (float)height, 0, 1};
+    int passWidth = width;
+    int passHeight = height;
+    if (!targets.empty() && targets[0] && targets[0]->width > 0 && targets[0]->height > 0) {
+        passWidth = targets[0]->width;
+        passHeight = targets[0]->height;
+    } else if (targets.empty() && depthMap && depthMap->width > 0 && depthMap->height > 0) {
+        passWidth = depthMap->width;
+        passHeight = depthMap->height;
+    }
+
+    D3D11_VIEWPORT vp = {0, 0, (float)passWidth, (float)passHeight, 0, 1};
     ctx->RSSetViewports(1, &vp);
 }
 
@@ -332,7 +342,49 @@ std::shared_ptr<RHITexture> RHI_DX11::CreateTexture(const std::wstring &path) {
     dev->CreateShaderResourceView(tex.Get(), 0, &t->srv);
     return t;
 }
+std::shared_ptr<RHITexture> RHI_DX11::CreateUAVTexture3D(int width, int height, int depth, int format) {
+    auto t = std::make_shared<DX11Texture>();
+    t->width = width;
+    t->height = height;
 
+    // Pokud format == 1, použijeme R16G16B16A16 (např. pro atmosférické LUT), jinak klasický 8-bit
+    DXGI_FORMAT fmt = (format == 1) ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    // 1. Vytvoření 3D Textury (D3D11_TEXTURE3D_DESC místo 2D)
+    D3D11_TEXTURE3D_DESC desc3D = {};
+    desc3D.Width = width;
+    desc3D.Height = height;
+    desc3D.Depth = depth;
+    desc3D.MipLevels = 1;
+    desc3D.Format = fmt;
+    desc3D.Usage = D3D11_USAGE_DEFAULT;
+    desc3D.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+    ComPtr<ID3D11Texture3D> tex3D;
+    HRESULT hr = dev->CreateTexture3D(&desc3D, nullptr, &tex3D);
+    if (FAILED(hr)) {
+        return nullptr;
+    }
+
+    // 2. Vytvoření SRV (Pro čtení v Raymarch shaderu)
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = fmt;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D!
+    srvDesc.Texture3D.MostDetailedMip = 0;
+    srvDesc.Texture3D.MipLevels = 1;
+    dev->CreateShaderResourceView(tex3D.Get(), &srvDesc, &t->srv);
+
+    // 3. Vytvoření UAV (Pro zápis z Compute Shaderu šumu)
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Format = fmt;
+    uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D!
+    uavDesc.Texture3D.MipSlice = 0;
+    uavDesc.Texture3D.FirstWSlice = 0;
+    uavDesc.Texture3D.WSize = depth;
+    dev->CreateUnorderedAccessView(tex3D.Get(), &uavDesc, &t->uav);
+
+    return t;
+}
 std::shared_ptr<RHITexture>
 RHI_DX11::CreateDDSTexture(const std::wstring &path) {
     std::string stringPath(path.begin(), path.end());
@@ -468,7 +520,18 @@ RHI_DX11::CreatePipeline(const PipelineConfig &config) {
         bDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
         bDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
         bDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-    } else {
+    }
+    else if (config.enableBlend) {
+        // --- NOVÉ: Klasický Alpha Blending pro Upscale mraků ---
+        bDesc.RenderTarget[0].BlendEnable = TRUE;
+        bDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        bDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        bDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        bDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    }
+    else {
         bDesc.RenderTarget[0].BlendEnable = FALSE;
     }
     bDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;

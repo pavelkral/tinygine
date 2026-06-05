@@ -8,6 +8,7 @@ add_compile_definitions(UNICODE _UNICODE)
 # FIX OUTPUT DIRECTORIES
 # -----------------------------------------------------------------------------
 
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -22,7 +23,6 @@ endforeach()
 option(TRACY_ENABLE "Enable Tracy profiler" ON)
 
 include(FetchContent)
-
 
 # -----------------------------------------------------------------------------
 # CONFIGURE JOLT PHYSICS LIB
@@ -45,6 +45,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/JoltPhysics/Build/CMakeLists.txt")
 else()
     message(FATAL_ERROR "error finding: libs/JoltPhysics/Build!...")
 endif()
+
 
 # -----------------------------------------------------------------------------
 #  DIRECTX TOOL KIT & RmlUi & Freetype & ImGui

@@ -17,6 +17,7 @@ void Engine::RecreateRenderTargets() {
 	m_rtPingPong = m_rhi->CreateRenderTarget(w, h, 0);
 
 	m_ssaoParams.screenSize = { (float)w, (float)h };
+	if (m_Clouds) m_Clouds->OnResize(m_rhi.get(), w, h);
 }
 
 
@@ -171,7 +172,7 @@ void Engine::LoadResourcesAndScene() {
 	m_prefilterMap = m_rhi->CreateDDSTexture(L"assets/textures/ibl/prefiltered.dds");
 	m_brdfLut = m_rhi->CreateDDSTexture(L"assets/textures/ibl/xBrdf.dds");
 
-	m_globalBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, sizeof(GlobalData) * 100);
+	m_globalBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, sizeof(GlobalData) * 500);
 	m_instanceBuffer = m_rhi->CreateBuffer(BufferType::Instance, nullptr, sizeof(ObjectData) * 15000);
 	m_computeUniformBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, 256 * 15000);
 	m_skinnedObjectBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, sizeof(SkinnedObjectData) * 5000);
@@ -179,7 +180,11 @@ void Engine::LoadResourcesAndScene() {
 
 	m_skybox = std::make_unique<Skybox>(); m_skybox->Init(m_rhi.get(), L"assets/textures/ibl/skybox.dds");
 	m_atmosphere = std::make_unique<Atmosphere>(); m_atmosphere->Init(m_rhi.get());
+	// Vytvoří constant buffer zarovnaný na DX12 standard (násobky 256)
 
+
+	m_Clouds = std::make_unique<VolumetricClouds>();
+	m_Clouds->Init(m_rhi.get());
 	PipelineConfig lineCfg; lineCfg.vsPath = L"shaders/rhi/line.vert.hlsl"; lineCfg.psPath = L"shaders/rhi/line.frag.hlsl"; lineCfg.topology = Topology::LineList; lineCfg.cullMode = CullMode::None; lineCfg.depthTest = true; lineCfg.depthWrite = false;
 	m_linePipeline = m_rhi->CreatePipeline(lineCfg);
 	m_lineBuffer = m_rhi->CreateBuffer(BufferType::Vertex, nullptr, 2000000 * sizeof(Vertex));
@@ -217,9 +222,9 @@ void Engine::BuildHardcodedScene() {
 
 	// --- Floor ---
 	auto floorObj = std::make_unique<GameObject>("Floor");
-	floorObj->transform.position = { 0, -1, 0 }; floorObj->transform.scale = { 200.0, 2.0, 200.0 };
+	floorObj->transform.position = { 0, -1, 0 }; floorObj->transform.scale = { 2000.0, 2.0, 2000.0 };
 	floorObj->AddComponent<MeshRenderer>(m_assets.m_meshes["FloorCube"], m_assets.m_allMaterials["Mat_Static_Floor"], false, "FloorCube");
-	floorObj->AddComponent<BoxCollider>(SM::Vector3(200.0f, 2.0f, 200.0f));
+	floorObj->AddComponent<BoxCollider>(SM::Vector3(2000.0f, 2.0f, 2000.0f));
 	floorObj->AddComponent<Rigidbody>(&bi, false);
 	m_sceneManager.AddObject(std::move(floorObj));
 
@@ -517,16 +522,29 @@ void Engine::OnRender() {
 
 	if (mainSun && sunTransform) {
 		XMMATRIX rot = XMMatrixRotationRollPitchYaw(sunTransform->eulerAngles.x * (XM_PI / 180.0f), sunTransform->eulerAngles.y * (XM_PI / 180.0f), sunTransform->eulerAngles.z * (XM_PI / 180.0f));
-		XMVECTOR forward = XMVector3TransformCoord(XMVectorSet(0, 0, 1, 0), rot);
-		XMStoreFloat3(&dirLightDir, forward);
+
+		// forwardVektor je směr toku světla (od slunce dolů na mapu)
+		XMVECTOR forwardVector = XMVector3TransformCoord(XMVectorSet(0, 0, 1, 0), rot);
+		XMStoreFloat3(&dirLightDir, forwardVector);
 
 		dirLightColor = { mainSun->color.x, mainSun->color.y, mainSun->color.z };
 		dirLightIntensity = mainSun->intensity;
 		castShadows = mainSun->castShadows;
 
+		// Stínová kamera umístěná "ve slunci" a dívající se dolů
 		XMFLOAT3 shadowPos = { -dirLightDir.x * 50.0f, -dirLightDir.y * 50.0f, -dirLightDir.z * 50.0f };
-		lightView = XMMatrixLookToLH(XMLoadFloat3(&shadowPos), forward, XMVectorSet(0, 1, 0, 0));
+		lightView = XMMatrixLookToLH(XMLoadFloat3(&shadowPos), forwardVector, XMVectorSet(0, 1, 0, 0));
 	}
+
+	SM::Vector3 sunDirToSun = SM::Vector3(-dirLightDir.x, -dirLightDir.y, -dirLightDir.z);
+	sunDirToSun.Normalize();
+
+	// TOTO JE KLÍČOVÉ PRO ATMOSFÉRU A MRAKY: Potřebují vektor ukazující K SLUNCI!
+		// 1. Získáme směr toku světla (dolů na zem)
+	SM::Vector3 lightTravelDir(dirLightDir.x, dirLightDir.y, dirLightDir.z);
+	lightTravelDir.Normalize();
+	// 2. Vektor K SLUNCI (Zdola nahoru k obloze)
+	//SM::Vector3 sunDirToSun = -lightTravelDir;
 
 	GlobalData gData = {};
 	gData.view = XMMatrixTranspose(view);
@@ -553,13 +571,18 @@ void Engine::OnRender() {
 	shadowGlobal.projection = XMMatrixTranspose(lightProj);
 
 	m_rhi->BeginFrame();
-	SM::Vector3 sunDirToSun = SM::Vector3(-dirLightDir.x, -dirLightDir.y, -dirLightDir.z);
-	sunDirToSun.Normalize();
-
-	// Počítáme atmosféru pouze tehdy, je-li zapnutá
-	if (m_enablePhysicallyBasedSky && m_atmosphere) {
-		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), sunDirToSun, { m_camera.pos.x, m_camera.pos.y, m_camera.pos.z });
+	
+	if (m_enableClouds && m_Clouds) {
+		m_Clouds->GenerateNoise(m_rhi.get(), m_computeUniformBuffer.get());
 	}
+
+	// --- OPRAVA: ODESLÁNÍ DO ATMOSFÉRY ---
+	if (m_enablePhysicallyBasedSky && m_atmosphere) {
+		// TADY BYLA CHYBA! Musíme poslat sunDirToSun (ukazuje na oblohu), jinak se disk nakreslí pod zem!
+		m_atmosphere->ComputeLUTs(m_rhi.get(), m_computeUniformBuffer.get(), sunDirToSun, { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z });
+	}
+	// Počítáme atmosféru pouze tehdy, je-li zapnutá
+	
 	if (m_simState == SimState::Playing) {
 		for (const auto& obj : m_sceneManager.m_objects) {
 			if (auto psc = obj->GetComponent<ParticleSystemComponent>()) psc->DispatchGPU(m_computeUniformBuffer.get());
@@ -690,6 +713,20 @@ void Engine::OnRender() {
 	else {
 		if (m_skybox) m_skybox->Render(m_rhi.get(), m_globalBuffer.get(), gData);
 	}
+
+	//if (m_enableClouds && m_Clouds) {
+	//	ZoneScopedNC("Draw Clouds", 0xFFFFFF);
+
+	//	float time = (float)ImGui::GetTime();
+	//	SM::Vector3 sunDir = { dirLightDir.x, dirLightDir.y, dirLightDir.z};
+	//	SM::Vector3 camPos = { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z };
+	//	SM::Matrix smView(view); SM::Matrix smProj(proj);
+
+	//	// POSÍLÁME m_rtPos (G-Buffer) MÍSTO HLOUBKY!
+	//	m_Clouds->Render(m_rhi.get(), m_cloudUniformBuffer.get(), smView, smProj, camPos, sunDir, time, m_rtPos.get());
+	//}
+	//// ------------------------------
+
 	for (const auto& obj : m_sceneManager.m_objects) {
 		if (auto psc = obj->GetComponent<ParticleSystemComponent>()) psc->Render(m_globalBuffer.get(), gData);
 	}
@@ -855,7 +892,15 @@ void Engine::OnRender() {
 		m_rhi->Draw(nullptr, 3);
 		currentImage = m_rtPingPong.get();
 	}
-
+	if (m_enableClouds && m_Clouds) {
+		ZoneScopedNC("Draw Clouds", 0xFFFFFF);
+		float time = (float)ImGui::GetTime();
+		SM::Vector3 camPos = { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z };
+		SM::Matrix smView(view); SM::Matrix smProj(proj);
+		m_Clouds->Render(m_rhi.get(), m_computeUniformBuffer.get(), m_globalBuffer.get(), smView, smProj,
+			m_camera.pos.x, m_camera.pos.y, m_camera.pos.z, // syrové DOUBLE!
+			sunDirToSun, time, m_rtPos.get(), currentImage);
+}
 	m_rhi->SetMainPassTarget();
 	m_rhi->ClearRenderTarget(m_rhi->GetBackBuffer(), screenClear);
 
@@ -1240,6 +1285,16 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Text("Camera: %s", m_cameraActive ? "ACTIVE" : "UI (TAB)");
 	ImGui::Separator();
 	ImGui::Checkbox("Enable VSync", &m_rhi->m_vsync);
+	ImGui::Separator();
+	if (ImGui::TreeNode("Camera Settings")) {
+		// Rychlost: default je 10.0, rozsah dáme např. 1.0 až 100.0
+		ImGui::SliderFloat("Speed", &m_camera.speed, 1.0f, 100.0f, "%.1f");
+
+		// Senzitivita: default je 0.006, rozsah dáme 0.001 až 0.05 s přesností na 4 desetinná místa
+		ImGui::SliderFloat("Sensitivity", &m_camera.sensitivity, 0.001f, 0.050f, "%.4f");
+
+		ImGui::TreePop();
+	}
 	ImGui::End();
 
 	ImGui::Begin("Simulation");
@@ -1259,6 +1314,7 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 
 	ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Environment");
 	ImGui::Checkbox("Physically Based Sky", &m_enablePhysicallyBasedSky);
+
 	ImGui::Separator();
 	ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Ambient Occlusion");
 	ImGui::Checkbox("Enable SSAO", &m_enableSSAO);
@@ -1271,11 +1327,16 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Checkbox("SSR (Reflections)", &m_enableSSR);
 	ImGui::Checkbox("Bloom (Glow)", &m_enableBloom);
 	ImGui::Checkbox("Vignette", &m_enableVignette);
+	ImGui::Checkbox("Enable Volumetric Clouds", &m_enableClouds);
 	ImGui::End();
 
 	if (m_enablePhysicallyBasedSky && m_atmosphere) {
 		m_atmosphere->DrawDebug();
 	}
+	if (m_enableClouds && m_Clouds) {
+		m_Clouds->DrawDebug();
+	}
+
 	ImGui::Begin("Inspector");
 	if (m_sceneManager.m_selectedObject) {
 		char nameBuf[128];

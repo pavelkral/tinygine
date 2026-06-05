@@ -20,4 +20,5 @@ struct PipelineConfig {
     bool isTransparent = false;
     bool isAdditive = false;
     int numRenderTargets = 1; //  MRT
+    bool enableBlend = false;
 };

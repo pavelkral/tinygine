@@ -46,6 +46,7 @@ public:
     std::shared_ptr<RHITexture> CreateTexture(const std::wstring &path) override;
     std::shared_ptr<RHITexture>
     CreateDDSTexture(const std::wstring &path) override;
+    std::shared_ptr<RHITexture> CreateUAVTexture3D(int width, int height, int depth, int format = 0) override;
     std::shared_ptr<RHIPipeline>
     CreatePipeline(const PipelineConfig &config) override;
     void BeginFrame() override;
