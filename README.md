@@ -23,10 +23,15 @@ At the core of the engine is a highly abstracted **RHI (Render Hardware Interfac
 * **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
 * **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
 * **Realtime Lighting:** Support for Directional and Point Lights with dynamic shadows and IBL.
+* **Physics Integration:** Jolt Physics integration for advanced collision detection and rigid body dynamics, including skeletal ragdolls.
+* **Editor Tools:** Dear ImGui-based interface with Gizmo support for real-time scene editing and component manipulation.
+* **Audio Engine:** Integrated miniaudio for spatialized 3D sound effects.
+* **Performance Profiling:** Optional Tracy integration for real-time CPU/GPU performance analysis.
  
 ###  Environment & Atmospheric Rendering
 
 * **Physically Accurate Atmosphere:** Real-time Rayleigh and Mie scattering computed via GPU Compute Shaders. Generates SkyView and Transmittance Look-Up Tables (LUTs) for skies.
+* **Realtime Volumetric Clouds:** Procedural 3D Perlin noise-based clouds with dynamic lighting and shadowing, rendered using ray marching techniques.
 * **Image-Based Lighting (IBL):** Support for Irradiance Maps, Prefiltered Environment Maps, and BRDF LUTs.
 * **Dynamic Shadows:** Directional light shadow mapping integrated directly into the PBR shader pipeline.
 
