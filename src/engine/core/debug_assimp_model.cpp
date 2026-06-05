@@ -1,4 +1,4 @@
-#include "core/debug_assimp_model.h"
+#include "engine/core/debug_assimp_model.h"
 
 #include <assimp/anim.h>
 #include <assimp/material.h>

@@ -56,14 +56,14 @@
 #include "tracy/Tracy.hpp"
 #include <SimpleMath.h>
 #include "miniaudio.h"
-#include "tinydds/tinydds.h"
+#include "rhi/tinydds/tinydds.h"
 
 #include <nlohmann/json.hpp>
 #include <objbase.h>
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
-#include "core/debug_assimp_model.h"
+#include "engine/core/debug_assimp_model.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>

@@ -544,7 +544,7 @@ void Engine::OnRender() {
 	SM::Vector3 lightTravelDir(dirLightDir.x, dirLightDir.y, dirLightDir.z);
 	lightTravelDir.Normalize();
 	// 2. Vektor K SLUNCI (Zdola nahoru k obloze)
-	//SM::Vector3 sunDirToSun = -lightTravelDir;
+	//SM::Vector3 sunDirToSun1 = -lightTravelDir;
 
 	GlobalData gData = {};
 	gData.view = XMMatrixTranspose(view);

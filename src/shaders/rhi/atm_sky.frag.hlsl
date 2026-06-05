@@ -50,7 +50,7 @@ PixelOutput PSMain(PS_IN input)
     color *= 0.15; // exposure factor for the sky texture, adjust as needed
 
     // sun lightE
-    float3 sunDirN = normalize(lightPos);
+    float3 sunDirN = normalize(-lightPos);
     float sunCos = dot(viewDir, sunDirN);
         
     // Sun disk

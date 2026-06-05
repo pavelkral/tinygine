@@ -1,5 +1,5 @@
 #include "engine/EngineDependencies.h"
-#include "core/Types.h"
+#include "engine/core/Types.h"
 
 SM::Matrix AssimpToSimpleMathMatrix(const aiMatrix4x4& m) {
     SM::Matrix mat(

@@ -5,13 +5,12 @@ Texture2D<float4> g_WeatherMap : register(t3);
 
 SamplerState g_Sampler : register(s0);
 
-// STRUKTURA NYNÍ PERFEKTNÌ LÍCUJE S C++!
 cbuffer CloudCB : register(b0)
 {
     float4 camForward;
     float4 camRight;
     float4 camUp;
-    float3 camPosAbs; // PØESNÌ JAKO V C++
+    float3 camPosAbs;
     float timeSeconds;
     float3 sunDir;
     float planetRadius;
@@ -188,14 +187,14 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     float2 ndc = input.uv * 2.0 - 1.0;
     ndc.y *= -1.0;
 
-    // --- SPRÁVNÉ ÈTENÍ VZDÁLENOSTI Z G-BUFFERU ---
+    // --- RENDER G-BUFFERU ---
     float4 pixelData = g_PosMap.SampleLevel(g_Sampler, input.uv, 0);
     float geomDist = 1e9;
     
-    // Pokud pixel není prázdná obloha (0,0,0)
+    // If the pixel is empty (0,0,0)
     if (abs(pixelData.x) > 0.001 || abs(pixelData.y) > 0.001 || abs(pixelData.z) > 0.001)
     {
-        // Spoèítá skuteènou vzdálenost stìny/objektu od kamery
+        // Calculate the actual distance from the wall/object to the camera
         geomDist = length(pixelData.xyz - camPosAbs);
         if (geomDist > 60000.0)
             geomDist = 1e9;
@@ -207,10 +206,10 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
 
     float3 rd = normalize(viewRay);
     
-    // Záchrana pøesnosti: Lokální raymarching
+    // Precision rescue: Local raymarching
     float3 ro = float3(0, 0, 0);
 
-    // --- NEPRÙSTØELNÁ LOGIKA OØEZU ---
+    // --- IMPENETRABLE CLIPPING LOGIC ---
     float camHeight = planetRadius + camPosAbs.y;
     float3 planetCenter = float3(0, -camHeight, 0);
     float rMin = planetRadius + layerParams.x;
@@ -225,7 +224,7 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     float tEnd = 0.0;
 
     if (tAtm.y < 0.0)
-        return float4(0, 0, 0, 0); // Díváme se úplnì do vesmíru
+        return float4(0, 0, 0, 0); // Looking completely into space
 
     if (camHeight < rMin)
     {
@@ -234,15 +233,15 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
             return float4(0, 0, 0, 0);
         horizonFade = smoothstep(0.001, max(0.001, horizonFadeEnd), viewUp);
 
-        // KAMERA JE POD MRAKY (Zabranuje renderovani mraku v zemi!)
+        // CAMERA IS BELOW THE CLOUDS (Prevents rendering clouds inside the ground!)
         if (tSrf.y < 0.0)
-            return float4(0, 0, 0, 0); // Díváme se do zemì
+            return float4(0, 0, 0, 0); // Looking into the ground
         tStart = max(0.0, tSrf.y);
         tEnd = tAtm.y;
     }
     else if (camHeight > rMax)
     {
-        // KAMERA JE NAD MRAKY
+        // CAMERA IS ABOVE THE CLOUDS
         if (tAtm.x < 0.0)
             return float4(0, 0, 0, 0);
         tStart = max(0.0, tAtm.x);
@@ -250,7 +249,7 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     }
     else
     {
-        // KAMERA JE UVNITØ MRAKÙ
+        // CAMERA IS INSIDE THE CLOUDS
         tStart = 0.0;
         tEnd = (tSrf.x > 0.0) ? tSrf.x : tAtm.y;
     }
@@ -258,7 +257,7 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     if (tEnd <= tStart)
         return float4(0, 0, 0, 0);
 
-    // Oøez G-Bufferem
+    // Clipping with G-Buffer
     if (tStart >= geomDist)
         return float4(0, 0, 0, 0);
     tEnd = min(tEnd, geomDist);
