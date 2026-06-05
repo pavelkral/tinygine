@@ -222,9 +222,9 @@ void Engine::BuildHardcodedScene() {
 
 	// --- Floor ---
 	auto floorObj = std::make_unique<GameObject>("Floor");
-	floorObj->transform.position = { 0, -1, 0 }; floorObj->transform.scale = { 200.0, 2.0, 200.0 };
+	floorObj->transform.position = { 0, -1, 0 }; floorObj->transform.scale = { 2000.0, 2.0, 2000.0 };
 	floorObj->AddComponent<MeshRenderer>(m_assets.m_meshes["FloorCube"], m_assets.m_allMaterials["Mat_Static_Floor"], false, "FloorCube");
-	floorObj->AddComponent<BoxCollider>(SM::Vector3(200.0f, 2.0f, 200.0f));
+	floorObj->AddComponent<BoxCollider>(SM::Vector3(2000.0f, 2.0f, 2000.0f));
 	floorObj->AddComponent<Rigidbody>(&bi, false);
 	m_sceneManager.AddObject(std::move(floorObj));
 
@@ -1285,6 +1285,16 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Text("Camera: %s", m_cameraActive ? "ACTIVE" : "UI (TAB)");
 	ImGui::Separator();
 	ImGui::Checkbox("Enable VSync", &m_rhi->m_vsync);
+	ImGui::Separator();
+	if (ImGui::TreeNode("Camera Settings")) {
+		// Rychlost: default je 10.0, rozsah dáme např. 1.0 až 100.0
+		ImGui::SliderFloat("Speed", &m_camera.speed, 1.0f, 100.0f, "%.1f");
+
+		// Senzitivita: default je 0.006, rozsah dáme 0.001 až 0.05 s přesností na 4 desetinná místa
+		ImGui::SliderFloat("Sensitivity", &m_camera.sensitivity, 0.001f, 0.050f, "%.4f");
+
+		ImGui::TreePop();
+	}
 	ImGui::End();
 
 	ImGui::Begin("Simulation");

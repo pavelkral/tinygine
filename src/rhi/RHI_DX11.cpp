@@ -150,7 +150,17 @@ void RHI_DX11::SetMRTTargets(std::vector<RHITexture *> targets,
         depthMap ? ((DX11Texture *)depthMap)->dsv.Get() : dsv.Get();
     ctx->OMSetRenderTargets((UINT)rtvs.size(), rtvs.data(), dsvLocal);
 
-    D3D11_VIEWPORT vp = {0, 0, (float)width, (float)height, 0, 1};
+    int passWidth = width;
+    int passHeight = height;
+    if (!targets.empty() && targets[0] && targets[0]->width > 0 && targets[0]->height > 0) {
+        passWidth = targets[0]->width;
+        passHeight = targets[0]->height;
+    } else if (targets.empty() && depthMap && depthMap->width > 0 && depthMap->height > 0) {
+        passWidth = depthMap->width;
+        passHeight = depthMap->height;
+    }
+
+    D3D11_VIEWPORT vp = {0, 0, (float)passWidth, (float)passHeight, 0, 1};
     ctx->RSSetViewports(1, &vp);
 }
 

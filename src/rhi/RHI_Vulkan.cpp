@@ -578,11 +578,14 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     VkAttachmentDescription offscreenAtt = {};
     offscreenAtt.format = swapchainFormat;
     offscreenAtt.samples = VK_SAMPLE_COUNT_1_BIT;
-    offscreenAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    offscreenAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    offscreenAtt.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    offscreenAtt.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+    // fix 1 - without this, the first post-process pass would clear to black
+    offscreenAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    offscreenAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+	// fix 2 - without this, the first post-process pass would clear to black instead of loading the bloom texture's contents
+    offscreenAtt.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; 
+    offscreenAtt.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkAttachmentReference offscreenColorRef = {
                                                0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
@@ -850,8 +853,15 @@ void RHI_Vulkan::SetMRTTargets(std::vector<RHITexture *> targets,
                 0x9e3779b9 + (hash << 6) + (hash >> 2);
     }
 
-    uint32_t passWidth = targets.empty() && depthMap ? depthMap->width : width;
-    uint32_t passHeight = targets.empty() && depthMap ? depthMap->height : height;
+    uint32_t passWidth = width;
+    uint32_t passHeight = height;
+    if (!targets.empty() && targets[0] && targets[0]->width > 0 && targets[0]->height > 0) {
+        passWidth = targets[0]->width;
+        passHeight = targets[0]->height;
+    } else if (targets.empty() && depthMap && depthMap->width > 0 && depthMap->height > 0) {
+        passWidth = depthMap->width;
+        passHeight = depthMap->height;
+    }
 
     // Create Framebuffer if it doesn't exist
     if (fbCache.find(hash) == fbCache.end()) {
@@ -925,10 +935,48 @@ void RHI_Vulkan::SetMRTTargets(std::vector<RHITexture *> targets,
     isPassRunning = true;
 }
 
-void RHI_Vulkan::ClearRenderTarget(RHITexture *target, const float color[4]) {}
+void RHI_Vulkan::ClearRenderTarget(RHITexture* target, const float color[4]) {
+    if (!isPassRunning || !target) return;
 
-void RHI_Vulkan::ClearDepthTarget(RHITexture *dt, float depth,
-                                  uint8_t stencil) {}
+    //check if target is in current MRT
+    uint32_t attachmentIndex = 0;
+    for (size_t i = 0; i < currentMRT.size(); i++) {
+        if (currentMRT[i] == target) {
+            attachmentIndex = static_cast<uint32_t>(i);
+            break;
+        }
+    }
+
+    VkClearAttachment clearAttachment = {};
+    clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    clearAttachment.colorAttachment = attachmentIndex;
+    clearAttachment.clearValue.color = { {color[0], color[1], color[2], color[3]} };
+
+    VkClearRect clearRect = {};
+    clearRect.rect.offset = { 0, 0 };
+    clearRect.rect.extent = { static_cast<uint32_t>(target->width), static_cast<uint32_t>(target->height) };
+    clearRect.baseArrayLayer = 0;
+    clearRect.layerCount = 1;
+
+    //manual delete like dx12 DX12
+    vkCmdClearAttachments(cmdBuffers[currentFrame], 1, &clearAttachment, 1, &clearRect);
+}
+
+void RHI_Vulkan::ClearDepthTarget(RHITexture* dt, float depth, uint8_t stencil) {
+    if (!isPassRunning) return;
+
+    VkClearAttachment clearAttachment = {};
+    clearAttachment.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    clearAttachment.clearValue.depthStencil = { depth, stencil };
+
+    VkClearRect clearRect = {};
+    clearRect.rect.offset = { 0, 0 };
+    clearRect.rect.extent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+    clearRect.baseArrayLayer = 0;
+    clearRect.layerCount = 1;
+
+    vkCmdClearAttachments(cmdBuffers[currentFrame], 1, &clearAttachment, 1, &clearRect);
+}
 
 void RHI_Vulkan::SetTexture(RHITexture *t, int s) {
     if (s >= 0 && s < 8) {

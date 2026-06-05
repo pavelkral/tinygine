@@ -24,13 +24,14 @@ struct CloudCB {
 
     SM::Vector3 cSun;    float sunInt;
     SM::Vector3 cAmbTop; float ambInt;
-    SM::Vector3 cAmbBot; float pad1;
+    SM::Vector3 cAmbBot; float turbulenceMeters;
 
     SM::Matrix invProj;
+    float horizonFadeEnd;
 
     // Struktura zabírá pøesnì 288 bytù.
     // Padujeme do 512 bytù (zbývá 224 bytù = 56 floatù).
-    float padding[56];
+    float padding[55];
 };
 class VolumetricClouds {
 public:
@@ -49,6 +50,7 @@ public:
         float detailStrength = 0.80f;
         float turbulenceMeters = 150.0f;
         float anvilStrength = 1.0f;
+        float horizonFadeEnd = 0.025f;
 
         float extinction = 0.0010f;
         float powderStrength = 2.0f;
@@ -104,6 +106,7 @@ private:
     std::shared_ptr<RHITexture> m_texHalfRes;
 
     bool m_isNoiseGenerated = false;
+    bool m_weatherMapDirty = false;
 
     void GenerateWeatherMap(RHI* rhi);
     int Wrap(int v, int period);

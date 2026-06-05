@@ -158,6 +158,10 @@ void VolumetricClouds::GenerateNoise(RHI* rhi, RHIBuffer* computeUniforms) {
 
 void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* globalUniforms, const SM::Matrix& view, const SM::Matrix& proj, double camX, double camY, double camZ, const SM::Vector3& sunDir, float timeSeconds, RHITexture* posTexture, RHITexture* renderTarget) {
     if (!m_texHalfRes) return;
+    if (m_weatherMapDirty) {
+        GenerateWeatherMap(rhi);
+        m_weatherMapDirty = false;
+    }
 
     CloudCB cb = {};
     SM::Matrix invView = view.Invert();
@@ -179,20 +183,20 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     double windDz = (double)cb.timeSeconds * m_Settings.windSpeedZ;
 
     double wSize = (double)m_Settings.weatherMapSize;
-    double wx = fmod(camX + windDx, wSize);
-    double wz = fmod(camZ + windDz, wSize);
+    double wx = fmod(windDx, wSize);
+    double wz = fmod(windDz, wSize);
     if (wx < 0) wx += wSize; if (wz < 0) wz += wSize;
     cb.weatherOffset = { (float)wx, (float)wz };
 
     double sSize = (double)m_Settings.shapeNoiseSize;
-    double sx = fmod(camX + windDx, sSize);
-    double sz = fmod(camZ + windDz, sSize);
+    double sx = fmod(windDx, sSize);
+    double sz = fmod(windDz, sSize);
     if (sx < 0) sx += sSize; if (sz < 0) sz += sSize;
     cb.shapeOffset = { (float)sx, (float)sz };
 
     double dSize = (double)m_Settings.detailNoiseSize;
-    double dx = fmod(camX + windDx * 1.5, dSize);
-    double dz = fmod(camZ + windDz * 1.5, dSize);
+    double dx = fmod(windDx * 1.5, dSize);
+    double dz = fmod(windDz * 1.5, dSize);
     if (dx < 0) dx += dSize; if (dz < 0) dz += dSize;
     cb.detailOffset = { (float)dx, (float)dz };
     // ------------------------------------------------------------------
@@ -210,9 +214,11 @@ void VolumetricClouds::Render(RHI* rhi, RHIBuffer* computeUniforms, RHIBuffer* g
     cb.cAmbTop = { m_Settings.ambTop[0], m_Settings.ambTop[1], m_Settings.ambTop[2] };
     cb.ambInt = m_Settings.ambientIntensity;
     cb.cAmbBot = { m_Settings.ambBot[0], m_Settings.ambBot[1], m_Settings.ambBot[2] };
+    cb.turbulenceMeters = m_Settings.turbulenceMeters;
 
     // Tvoje inverzní matice
     cb.invProj = proj.Invert().Transpose();
+    cb.horizonFadeEnd = m_Settings.horizonFadeEnd;
 
     // --- 1. RAYMARCH PASS ---
     std::vector<RHITexture*> halfTargets = { m_texHalfRes.get() };
@@ -255,15 +261,18 @@ void VolumetricClouds::DrawDebug() {
     if (ImGui::BeginTabBar("CloudTabs")) {
         if (ImGui::BeginTabItem("Weather Map")) {
             bool regen = false;
-            regen |= ImGui::SliderInt("Seed", &m_WeatherGen.seed, 0, 500);
-            regen |= ImGui::SliderInt("Base Period", &m_WeatherGen.basePeriod, 1, 12);
-            regen |= ImGui::SliderFloat("Coverage Threshold", &m_WeatherGen.coverageThreshold, 0.0f, 1.0f);
-            regen |= ImGui::SliderFloat("Coverage Contrast", &m_WeatherGen.coverageContrast, 0.1f, 6.0f);
-            regen |= ImGui::SliderFloat("Type Offset", &m_WeatherGen.typeOffset, -0.5f, 1.0f);
-            regen |= ImGui::SliderFloat("Type Contrast", &m_WeatherGen.typeContrast, 0.1f, 6.0f);
-            regen |= ImGui::SliderFloat("Storminess", &m_WeatherGen.storminess, 0.0f, 1.0f);
-            regen |= ImGui::SliderFloat("Density Var", &m_WeatherGen.densityVar, 0.0f, 1.0f);
-            regen |= ImGui::SliderFloat("Height Var", &m_WeatherGen.heightVar, 0.0f, 1.0f);
+            auto markWeatherEdited = [&]() { regen |= ImGui::IsItemDeactivatedAfterEdit(); };
+            ImGui::SliderInt("Seed", &m_WeatherGen.seed, 0, 500); markWeatherEdited();
+            ImGui::SliderInt("Base Period", &m_WeatherGen.basePeriod, 1, 12); markWeatherEdited();
+            ImGui::SliderFloat("Coverage Threshold", &m_WeatherGen.coverageThreshold, 0.0f, 1.0f); markWeatherEdited();
+            ImGui::SliderFloat("Coverage Contrast", &m_WeatherGen.coverageContrast, 0.1f, 6.0f); markWeatherEdited();
+            ImGui::SliderFloat("Type Offset", &m_WeatherGen.typeOffset, -0.5f, 1.0f); markWeatherEdited();
+            ImGui::SliderFloat("Type Contrast", &m_WeatherGen.typeContrast, 0.1f, 6.0f); markWeatherEdited();
+            ImGui::SliderFloat("Storminess", &m_WeatherGen.storminess, 0.0f, 1.0f); markWeatherEdited();
+            ImGui::SliderFloat("Density Var", &m_WeatherGen.densityVar, 0.0f, 1.0f); markWeatherEdited();
+            ImGui::SliderFloat("Height Var", &m_WeatherGen.heightVar, 0.0f, 1.0f); markWeatherEdited();
+            regen |= ImGui::Button("Regenerate Weather Map");
+            if (regen) m_weatherMapDirty = true;
             ImGui::EndTabItem();
         }
 
@@ -285,6 +294,7 @@ void VolumetricClouds::DrawDebug() {
             ImGui::SliderFloat("Detail Strength", &m_Settings.detailStrength, 0.0f, 1.0f);
             ImGui::SliderFloat("Turbulence (m)", &m_Settings.turbulenceMeters, 0.0f, 300.0f);
             ImGui::SliderFloat("Anvil Strength", &m_Settings.anvilStrength, 0.0f, 1.0f);
+            ImGui::SliderFloat("Horizon Fade", &m_Settings.horizonFadeEnd, 0.002f, 0.080f, "%.4f");
 
             ImGui::Separator();
             ImGui::SliderFloat("Extinction", &m_Settings.extinction, 0.0003f, 0.0040f, "%.6f");

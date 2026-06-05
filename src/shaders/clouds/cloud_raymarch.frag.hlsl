@@ -32,9 +32,10 @@ cbuffer CloudCB : register(b0)
     float3 cAmbTop;
     float ambInt;
     float3 cAmbBot;
-    float pad1;
+    float turbulenceMeters;
     
     float4x4 invProj;
+    float horizonFadeEnd;
 }
 
 struct PS_INPUT
@@ -109,6 +110,7 @@ float HeightProfile(float h, float type)
 
 float SampleDensity(float3 localPos, bool cheap)
 {
+    float3 worldPos = localPos + camPosAbs;
     float3 planetCenter = float3(0, -planetRadius - camPosAbs.y, 0);
     float3 pFromCenter = localPos - planetCenter;
     float dist = length(pFromCenter);
@@ -121,7 +123,7 @@ float SampleDensity(float3 localPos, bool cheap)
     float h = saturate((dist - rMin) / max(1e-6, (rMax - rMin)));
 
     float weatherMapSize = shapeParams.z;
-    float2 weatherUV = (localPos.xz + weatherOffset) / weatherMapSize;
+    float2 weatherUV = (worldPos.xz + weatherOffset) / weatherMapSize;
     float4 weatherData = g_WeatherMap.SampleLevel(g_Sampler, weatherUV, 0);
 
     float coverage = saturate(weatherData.r - shapeParams.x);
@@ -138,20 +140,20 @@ float SampleDensity(float3 localPos, bool cheap)
 
     float detailSize = layerParams.w;
     float3 detailPos = float3(
-        localPos.x + detailOffset.x + (timeSeconds * 20.0),
-        localPos.y + camPosAbs.y,
-        localPos.z + detailOffset.y + (timeSeconds * -10.0)
+        worldPos.x + detailOffset.x,
+        worldPos.y,
+        worldPos.z + detailOffset.y
     );
     
     float3 detailUV = detailPos / detailSize;
     float4 dN = g_DetailNoise.SampleLevel(g_Sampler, detailUV, 0);
     
     float erosionNoise = dN.r * 0.65 + dN.g * 0.35;
-    float turbulenceForce = 400.0;
+    float turbulenceForce = max(0.0, turbulenceMeters);
     float3 warp = (dN.gba * 2.0 - 1.0) * turbulenceForce;
 
     float shapeSize = layerParams.z;
-    float3 shapePos = float3(localPos.x + shapeOffset.x, localPos.y + camPosAbs.y, localPos.z + shapeOffset.y);
+    float3 shapePos = float3(worldPos.x + shapeOffset.x, worldPos.y, worldPos.z + shapeOffset.y);
     float anvilMask = smoothstep(0.6, 1.0, h) * typeParams.z;
     shapePos.x += anvilMask * 3000.0;
     
@@ -213,6 +215,8 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
     float3 planetCenter = float3(0, -camHeight, 0);
     float rMin = planetRadius + layerParams.x;
     float rMax = planetRadius + layerParams.y;
+    float3 localUp = normalize(ro - planetCenter);
+    float horizonFade = 1.0;
 
     float2 tAtm = RaySphere(ro - planetCenter, rd, rMax);
     float2 tSrf = RaySphere(ro - planetCenter, rd, rMin);
@@ -225,7 +229,12 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
 
     if (camHeight < rMin)
     {
-        // KAMERA JE POD MRAKY (Zabraòuje renderování mrakù v zemi!)
+        float viewUp = dot(rd, localUp);
+        if (viewUp <= 0.001)
+            return float4(0, 0, 0, 0);
+        horizonFade = smoothstep(0.001, max(0.001, horizonFadeEnd), viewUp);
+
+        // KAMERA JE POD MRAKY (Zabranuje renderovani mraku v zemi!)
         if (tSrf.y < 0.0)
             return float4(0, 0, 0, 0); // Díváme se do zemì
         tStart = max(0.0, tSrf.y);
@@ -328,5 +337,5 @@ float4 PSMain(PS_INPUT input) : SV_TARGET
             break;
     }
 
-    return float4(acc, (1.0 - trans));
+    return float4(acc * horizonFade, (1.0 - trans) * horizonFade);
 }

@@ -442,6 +442,10 @@ void RHI_DX12::SetMRTTargets(std::vector<RHITexture *> targets,
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = {};
     int passWidth = w;
     int passHeight = h;
+    if (!targets.empty() && targets[0] && targets[0]->width > 0 && targets[0]->height > 0) {
+        passWidth = targets[0]->width;
+        passHeight = targets[0]->height;
+    }
 
     if (depthMap) {
         auto dxd = (DX12Texture *)depthMap;
