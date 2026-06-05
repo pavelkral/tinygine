@@ -1287,12 +1287,8 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Checkbox("Enable VSync", &m_rhi->m_vsync);
 	ImGui::Separator();
 	if (ImGui::TreeNode("Camera Settings")) {
-		// Rychlost: default je 10.0, rozsah dáme např. 1.0 až 100.0
 		ImGui::SliderFloat("Speed", &m_camera.speed, 1.0f, 100.0f, "%.1f");
-
-		// Senzitivita: default je 0.006, rozsah dáme 0.001 až 0.05 s přesností na 4 desetinná místa
 		ImGui::SliderFloat("Sensitivity", &m_camera.sensitivity, 0.001f, 0.050f, "%.4f");
-
 		ImGui::TreePop();
 	}
 	ImGui::End();
