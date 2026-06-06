@@ -1179,6 +1179,17 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 				m_sceneManager.m_selectedObject = go.get();
 				m_sceneManager.AddObject(std::move(go));
 			}
+			if (ImGui::MenuItem("Create Plane")) {
+				static int planeCounter = 1;
+				auto go = std::make_unique<GameObject>("Plane_" + std::to_string(planeCounter++));
+				go->transform.position = { spawnX, spawnY, spawnZ };
+				go->AddComponent<MeshRenderer>(m_assets.m_meshes["Plane"], defaultMat, true, "Plane");
+				go->AddComponent<BoxCollider>(SM::Vector3(5.0f, 0.05f, 5.0f));
+				go->AddComponent<Rigidbody>(&m_physics->GetBodyInterface(), false);
+				go->Start();
+				m_sceneManager.m_selectedObject = go.get();
+				m_sceneManager.AddObject(std::move(go));
+			}
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -1283,14 +1294,13 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
 	ImGui::Text("API: %s", m_apiChoice == 1 ? "DX12" : (m_apiChoice == 2 ? "Vulkan" : "DX11"));
 	ImGui::Text("Camera: %s", m_cameraActive ? "ACTIVE" : "UI (TAB)");
-	ImGui::Separator();
+	ImGui::SameLine();
 	ImGui::Checkbox("Enable VSync", &m_rhi->m_vsync);
-	ImGui::Separator();
-	if (ImGui::TreeNode("Camera Settings")) {
-		ImGui::SliderFloat("Speed", &m_camera.speed, 1.0f, 100.0f, "%.1f");
-		ImGui::SliderFloat("Sensitivity", &m_camera.sensitivity, 0.001f, 0.050f, "%.4f");
-		ImGui::TreePop();
-	}
+	ImGui::End();
+
+	ImGui::Begin("Camera Settings");
+	ImGui::SliderFloat("Speed", &m_camera.speed, 1.0f, 100.0f, "%.1f");
+	ImGui::SliderFloat("Sensitivity", &m_camera.sensitivity, 0.001f, 0.050f, "%.4f");
 	ImGui::End();
 
 	ImGui::Begin("Simulation");

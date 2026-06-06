@@ -3,6 +3,7 @@
 // ==============================================================================
 // DIRECTX 11 (FXC)
 // ==============================================================================
+
 ComPtr<ID3DBlob> ShaderCompiler::CompileDX11(const std::wstring& path, const char* entry, const char* target) {
     ComPtr<ID3DBlob> shaderBlob;
     ComPtr<ID3DBlob> errorBlob;
@@ -32,6 +33,7 @@ ComPtr<ID3DBlob> ShaderCompiler::CompileDX11(const std::wstring& path, const cha
 // ==============================================================================
 // DIRECTX 12 (DXC)
 // ==============================================================================
+
 ComPtr<IDxcBlob> ShaderCompiler::CompileDX12(const std::wstring& path, const char* entry, const char* target) {
     ComPtr<IDxcUtils> utils;
     DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
@@ -80,6 +82,7 @@ ComPtr<IDxcBlob> ShaderCompiler::CompileDX12(const std::wstring& path, const cha
 // ==============================================================================
 // VULKAN (DXC -> SPIR-V)
 // ==============================================================================
+
 std::vector<uint8_t> ShaderCompiler::CompileVulkan(const std::wstring& path, const char* entry, const char* target) {
     ComPtr<IDxcUtils> utils;
     DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));

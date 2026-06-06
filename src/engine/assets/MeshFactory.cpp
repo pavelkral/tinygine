@@ -119,3 +119,57 @@ std::shared_ptr<Mesh> MeshFactory::CreateCapsule(
 
     return std::make_shared<Mesh>(rhi, v, idx);
 }
+std::shared_ptr<Mesh> MeshFactory::CreatePlane(
+    RHI* rhi,
+    float width,
+    float depth,
+    int resX,
+    int resZ,
+    SM::Vector2 uvScale) {
+
+    std::vector<Vertex> v;
+    std::vector<uint32_t> idx;
+
+    if (resX < 1) resX = 1;
+    if (resZ < 1) resZ = 1;
+
+    float halfWidth = width * 0.5f;
+    float halfDepth = depth * 0.5f;
+
+    float dx = width / static_cast<float>(resX);
+    float dz = depth / static_cast<float>(resZ);
+
+    float du = uvScale.x / static_cast<float>(resX);
+    float dv = uvScale.y / static_cast<float>(resZ);
+
+    for (int i = 0; i <= resZ; ++i) {
+        float z = halfDepth - i * dz;
+        for (int j = 0; j <= resX; ++j) {
+            float x = -halfWidth + j * dx;
+
+            Vertex vertex;
+            vertex.pos = { x, 0.0f, z };
+            vertex.normal = { 0.0f, 1.0f, 0.0f };
+            vertex.uv = { j * du, i * dv };
+            v.push_back(vertex);
+        }
+    }
+    for (int i = 0; i < resZ; ++i) {
+        for (int j = 0; j < resX; ++j) {
+            uint32_t v0 = i * (resX + 1) + j;
+            uint32_t v1 = v0 + 1;
+            uint32_t v2 = (i + 1) * (resX + 1) + j;
+            uint32_t v3 = v2 + 1;
+
+            idx.push_back(v0);
+            idx.push_back(v1);
+            idx.push_back(v2);
+
+            idx.push_back(v2);
+            idx.push_back(v1);
+            idx.push_back(v3);
+        }
+    }
+
+    return std::make_shared<Mesh>(rhi, v, idx);
+}

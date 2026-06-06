@@ -1,4 +1,4 @@
-#include "rhi/MipGenerator.h"
+#include "rhi/utils/MipGenerator.h"
 
 float ToLinear(uint8_t v) { float f = v / 255.0f; return (f <= 0.04045f) ? f / 12.92f : powf((f + 0.055f) / 1.055f, 2.4f); }
 uint8_t ToGamma(float f) { f = (f <= 0.0031308f) ? f * 12.92f : 1.055f * powf(f, 1.0f / 2.4f) - 0.055f; return (uint8_t)(std::clamp(f * 255.0f, 0.0f, 255.0f)); }

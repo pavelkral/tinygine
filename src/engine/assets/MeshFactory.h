@@ -21,4 +21,12 @@ namespace MeshFactory {
 		float halfHeight = 0.5f,
 		int resolution = 16,
 		SM::Vector2 uvScale = { 1.0f, 1.0f });
+
+	std::shared_ptr<Mesh> CreatePlane(
+		RHI* rhi,
+		float width = 10.0f,
+		float depth = 10.0f,
+		int resX = 10,
+		int resZ = 10,
+		SM::Vector2 uvScale = { 1.0f, 1.0f });
 }

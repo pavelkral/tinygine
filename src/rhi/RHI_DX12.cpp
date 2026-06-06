@@ -1,6 +1,8 @@
 #include "rhi/RHI_DX12.h"
 #include "engine/EngineDependencies.h"
 #include "rhi/utils/ShaderCompiler.h"
+
+
 void RHI_DX12::Sync() {
     fVal++;
     queue->Signal(fence.Get(), fVal);
@@ -1094,8 +1096,7 @@ void RHI_DX12::SetBoneUniforms(RHIBuffer *b, const void *d, size_t s) {
     if (d && dx->map)
         memcpy(dx->map + frameBase + bOff, d, s);
 
-    cmd->SetGraphicsRootConstantBufferView(10, dx->res->GetGPUVirtualAddress() +
-                                                   frameBase + bOff);
+    cmd->SetGraphicsRootConstantBufferView(10, dx->res->GetGPUVirtualAddress() + frameBase + bOff);
     bOff += aligned;
 }
 
@@ -1103,8 +1104,7 @@ void RHI_DX12::SetPushConstants(const void *data, size_t size) {
     cmd->SetGraphicsRoot32BitConstants(1, (UINT)size / 4, data, 0);
 }
 
-std::shared_ptr<RHIPipeline>
-RHI_DX12::CreatePipeline(const PipelineConfig &config) {
+std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &config) {
     auto p = std::make_shared<DX12Pipeline>();
 
     // 1. Kompilace Vertex Shaderu pøes moderní DXC
@@ -1538,7 +1538,6 @@ void RHI_DX12::ComputeBufferBarrier(RHIBuffer *buffer) {
     rb.UAV.pResource = dx->res.Get();
     cmd->ResourceBarrier(1, &rb);
 
-    TransitionBuffer(dx->res.Get(), dx->currentState,
-                     D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    TransitionBuffer(dx->res.Get(), dx->currentState,D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     dx->currentState = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
 }

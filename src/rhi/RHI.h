@@ -2,7 +2,7 @@
 
 #include "pch/Pch.h"
 #include "rhi/GraphicsTypes.h"
-#include "rhi/MipGenerator.h"
+#include "rhi/utils/MipGenerator.h"
 
 enum class BufferType { Vertex, Index, Constant, Instance, ComputeUAV };
 class RHIBuffer { public: UINT stride = 0; virtual ~RHIBuffer(); };

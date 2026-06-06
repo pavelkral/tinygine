@@ -1,7 +1,7 @@
 #pragma once
 
 #include "pch/Pch.h"
-#include "rhi/MipGenerator.h"
+#include "rhi/utils/MipGenerator.h"
 #include "core/Types.h"
 #include "rhi/GraphicsTypes.h"
 #include "rhi/RHI.h"

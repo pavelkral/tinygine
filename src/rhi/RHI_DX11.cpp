@@ -1,6 +1,6 @@
 #include "rhi/RHI_DX11.h"
 #include "engine/EngineDependencies.h"
-
+#include "rhi/utils/ShaderCompiler.h"
 bool RHI_DX11::Init(HWND hWnd, int w, int h) {
     width = w;
     height = h;
@@ -433,22 +433,22 @@ RHI_DX11::CreateDDSTexture(const std::wstring &path) {
     return dxt;
 }
 
-std::shared_ptr<RHIPipeline>
-RHI_DX11::CreatePipeline(const PipelineConfig &config) {
+std::shared_ptr<RHIPipeline> RHI_DX11::CreatePipeline(const PipelineConfig &config) {
     auto p = std::make_shared<DX11Pipeline>();
-    ComPtr<ID3DBlob> vsB, psB, err;
-    D3DCompileFromFile(config.vsPath.c_str(), nullptr,
-                       D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0", 0,
-                       0, &vsB, &err);
-    if (!config.psPath.empty())
-        D3DCompileFromFile(config.psPath.c_str(), nullptr,
-                           D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_5_0", 0,
-                           0, &psB, &err);
-    dev->CreateVertexShader(vsB->GetBufferPointer(), vsB->GetBufferSize(), 0,
-                            &p->vs);
-    if (psB)
-        dev->CreatePixelShader(psB->GetBufferPointer(), psB->GetBufferSize(), 0,
-                               &p->ps);
+
+    ComPtr<ID3DBlob> vsB = ShaderCompiler::CompileDX11(config.vsPath, "VSMain", "vs_5_0");
+    if (!vsB) return nullptr; 
+
+    ComPtr<ID3DBlob> psB = nullptr;
+    if (!config.psPath.empty()) {
+        psB = ShaderCompiler::CompileDX11(config.psPath, "PSMain", "ps_5_0");
+    }
+
+    dev->CreateVertexShader(vsB->GetBufferPointer(), vsB->GetBufferSize(), 0, &p->vs);
+
+    if (psB) {
+        dev->CreatePixelShader(psB->GetBufferPointer(), psB->GetBufferSize(), 0, &p->ps);
+    }
 
     if (config.vsPath.find(L"fullscreen") == std::wstring::npos) {
         std::vector<D3D11_INPUT_ELEMENT_DESC> ied = {
@@ -693,20 +693,15 @@ void RHI_DX11::Resize(int newW, int newH) {
     dev->CreateDepthStencilView(db.Get(), 0, &dsv);
 }
 
-std::shared_ptr<RHIPipeline>
-RHI_DX11::CreateComputePipeline(const std::wstring &csPath) {
+std::shared_ptr<RHIPipeline> RHI_DX11::CreateComputePipeline(const std::wstring& csPath) {
     auto p = std::make_shared<DX11Pipeline>();
-    ComPtr<ID3DBlob> csB, err;
-    HRESULT hr = D3DCompileFromFile(csPath.c_str(), nullptr,
-                                    D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSMain",
-                                    "cs_5_0", 0, 0, &csB, &err);
-    if (FAILED(hr))
-        return nullptr;
-    dev->CreateComputeShader(csB->GetBufferPointer(), csB->GetBufferSize(),
-                             nullptr, &p->cs);
+
+    ComPtr<ID3DBlob> csB = ShaderCompiler::CompileDX11(csPath, "CSMain", "cs_5_0");
+    if (!csB) return nullptr;
+
+    dev->CreateComputeShader(csB->GetBufferPointer(), csB->GetBufferSize(), nullptr, &p->cs);
     return p;
 }
-
 std::shared_ptr<RHITexture> RHI_DX11::CreateUAVTexture(int w, int h,
                                                        int format) {
     auto t = std::make_shared<DX11Texture>();

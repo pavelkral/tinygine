@@ -33,6 +33,7 @@ void AssetRegistry::LoadHardcodedAssets() {
 	m_meshes["Cube"] = MeshFactory::CreateCube(m_rhi, 1.0f);
 	m_meshes["Capsule"] = MeshFactory::CreateCapsule(m_rhi, 0.5f, 0.5f, 16);
 	m_meshes["FloorCube"] = MeshFactory::CreateCube(m_rhi, 1.0f, { 50.0f, 50.0f });
+	m_meshes["Plane"] = MeshFactory::CreatePlane(m_rhi, 10.0f, 10.0f, 10, 10, { 1.0f, 1.0f });
 
 	auto matFloor = std::make_shared<Material>("Mat_Static_Floor", m_pipeSolid, "Solid");
 	matFloor->albedoPath = "assets/textures/brick/brickA.png";
@@ -167,6 +168,7 @@ void AssetRegistry::LoadPrimitiveMeshes() {
 		m_meshes["Cube"] = MeshFactory::CreateCube(m_rhi, 1.0f);
 		m_meshes["Capsule"] = MeshFactory::CreateCapsule(m_rhi, 0.5f, 0.5f, 16);
 		m_meshes["FloorCube"] = MeshFactory::CreateCube(m_rhi, 1.0f, { 50.0f, 50.0f });
+		m_meshes["Plane"] = MeshFactory::CreatePlane(m_rhi, 10.0f, 10.0f, 10, 10, { 1.0f, 1.0f });
 		std::cout << "[AssetRegistry] Primitive meshes (Cube, Sphere, Capsule) generated.\n";
 	}
 }

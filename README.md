@@ -19,15 +19,15 @@ At the core of the engine is a highly abstracted **RHI (Render Hardware Interfac
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
 * **Skeletal Animation (Assimp):** Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
 * **Compute Shader Integration:** Direct access to Compute Pipelines for parallel GPU calculations (UAV/SRV textures, buffers).
-* **Asset Browser:** File-system integration with Drag & Drop support to spawn 3D models (`.fbx/.gltf`) directly into the scene.
-* **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
-* **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
 * **Realtime Lighting:** Support for Directional and Point Lights with dynamic shadows and IBL.
-* **Physics Integration:** Jolt Physics integration for advanced collision detection and rigid body dynamics, including skeletal ragdolls.
-* **Editor Tools:** Dear ImGui-based interface with Gizmo support for real-time scene editing and component manipulation.
+* **Physics Integration:** Physics integration for advanced collision detection and rigid body dynamics, including skeletal ragdolls.
 * **Audio Engine:** Integrated miniaudio for spatialized 3D sound effects.
 * **Performance Profiling:** Optional Tracy integration for real-time CPU/GPU performance analysis.
- 
+* **Scene Serialization:** Automatic saving/loading of scene hierarchies and component states to JSON.
+* **Material System:** Custom `.mat` (JSON-based) file format for persistent material property storage.
+* **Asset Browser:** File-system integration with Drag & Drop support to spawn 3D models (`.fbx/.gltf`) directly into the scene. 
+* **Editor Tools:** Dear ImGui-based interface with Gizmo support for real-time scene editing and component manipulation.
+	
 ###  Environment & Atmospheric Rendering
 
 * **Physically Accurate Atmosphere:** Real-time Rayleigh and Mie scattering computed via GPU Compute Shaders. Generates SkyView and Transmittance Look-Up Tables (LUTs) for skies.
