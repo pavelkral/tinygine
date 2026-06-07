@@ -1,6 +1,6 @@
 //#include "engine/EngineDependencies.h"
 #include "engine/Engine.h"
-
+///#include "engine/terrain/TerrainTypes.h
 
 void Engine::RecreateRenderTargets() {
 	int w, h;
@@ -46,25 +46,39 @@ Engine::~Engine() {
 
 
 bool Engine::OnInit(HINSTANCE hInstance, int nCmdShow) {
-	m_apiChoice = 0;
-	int res = MessageBoxW(0, L"Yes = DirectX 12\nNo = Other options (DX11 / Vulkan)", L"API Choice - Step 1", MB_YESNO | MB_ICONQUESTION);
-	if (res == IDYES) { m_apiChoice = 1; }
+
+
+	int res = MessageBoxW(
+		0, // or m_hWnd if the window handle is already available
+		L"Select Graphics API:\n\n[Yes] = DirectX 12\n[No]  = Vulkan",
+		L"API Choice",
+		MB_YESNO | MB_ICONQUESTION
+	);
+
+	if (res == IDYES) {
+		m_apiChoice = 1; // DirectX 12
+	}
 	else {
-		res = MessageBoxW(0, L"Yes = Vulkan\nNo = DirectX 11", L"API Choice - Step 2", MB_YESNO | MB_ICONQUESTION);
-		if (res == IDYES) m_apiChoice = 2; else m_apiChoice = 0;
+		m_apiChoice = 2; // Vulkan
 	}
 
 	WNDCLASSEXW wc = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0, 0, hInstance, 0, 0, 0, 0, L"EngineClass", 0 };
 	RegisterClassExW(&wc);
+
 	m_hwnd = CreateWindowExW(0, L"EngineClass", g_config.windowTitle, WS_OVERLAPPEDWINDOW, 100, 100, g_config.windowWidth, g_config.windowHeight, 0, 0, hInstance, 0);
 
 	RAWINPUTDEVICE rd = { 1, 2, 0, m_hwnd };
 	RegisterRawInputDevices(&rd, 1, sizeof(rd));
 	ShowWindow(m_hwnd, nCmdShow);
 
-	if (m_apiChoice == 1) m_rhi = std::make_unique<RHI_DX12>();
-	else if (m_apiChoice == 2) m_rhi = std::make_unique<RHI_Vulkan>();
-	else m_rhi = std::make_unique<RHI_DX11>();
+	if (m_apiChoice == 1) 
+		m_rhi = std::make_unique<RHI_DX12>();
+	else if (m_apiChoice == 2)
+		m_rhi = std::make_unique<RHI_Vulkan>();
+	else
+		return false;
+		
+		
 
 	if (!m_rhi->Init(m_hwnd, g_config.windowWidth, g_config.windowHeight)) return false;
 
@@ -148,6 +162,10 @@ void Engine::Run() {
 void Engine::LoadResourcesAndScene() {
 	RecreateRenderTargets();
 	InitSSAO();
+
+	MapConfig mapCfg;
+	m_terrainManager.Init(m_rhi.get(), mapCfg);
+	m_terrainManager.Start();
 
 	// 1. PIPELINE & BUFFERS 
 	PipelineConfig fsCfg;
@@ -410,7 +428,40 @@ void Engine::BuildHardcodedScene() {
 	m_sceneManager.StartAll();
 	std::cout << ">>> BOOTSTRAP HOTOV! Bezte v UI do File -> Save Scene a ulozte jako 'default_scene.json' <<<\n";
 }
+int Engine::CalculateBestZoom(double fAltitude) {
+	if (fAltitude > 80000.0) return 10;
+	if (fAltitude > 60000.0) return 11;
+	if (fAltitude > 40000.0) return 12;
+	return 13;
+}
 
+void Engine::CheckCollisions() {
+	Vector3d camPosD = { m_camera.pos.x, m_camera.pos.y, m_camera.pos.z };
+	if (m_sceneManager.m_selectedObject) {
+		Vector3d objPos = m_sceneManager.m_selectedObject->transform.position;
+		m_fCurrentGroundHeight = m_terrainManager.GetGroundHeight(objPos, camPosD, m_fTerrainExaggeration, m_iCurrentZoom);
+
+		float gearOffset = 1.5f;
+		if (objPos.y < m_fCurrentGroundHeight + gearOffset) {
+			m_sceneManager.m_selectedObject->transform.position.y = m_fCurrentGroundHeight + gearOffset;
+			if (auto rb = m_sceneManager.m_selectedObject->GetComponent<Rigidbody>()) {
+				if (!rb->bodyID.IsInvalid()) {
+					JPH::BodyInterface& bi = m_physics->GetBodyInterface();
+					JPH::Vec3 vel = bi.GetLinearVelocity(rb->bodyID);
+					if (vel.GetY() < 0) {
+						vel.SetY(0);
+						bi.SetLinearVelocity(rb->bodyID, vel);
+					}
+					JPH::RVec3 p((float)(m_sceneManager.m_selectedObject->transform.position.x - g_physicsOrigin.x),
+						(float)(m_sceneManager.m_selectedObject->transform.position.y - g_physicsOrigin.y),
+						(float)(m_sceneManager.m_selectedObject->transform.position.z - g_physicsOrigin.z));
+					JPH::Quat q; bi.GetPositionAndRotation(rb->bodyID, p, q);
+					bi.SetPosition(rb->bodyID, p, JPH::EActivation::DontActivate);
+				}
+			}
+		}
+	}
+}
 
 void Engine::OnInput(float dt) {
 	if (Input::GetKeyDown(VK_TAB)) {
@@ -448,6 +499,52 @@ void Engine::OnUpdate(float dt) {
 	if (m_simState == SimState::Playing) {
 		m_sceneManager.Update(dt);
 	}
+
+	// --- TERRAIN STREAMING LOGIC ---
+	int iDesiredZoom = CalculateBestZoom(m_camera.pos.y);
+	iDesiredZoom = std::clamp(iDesiredZoom, 11, 13);
+
+	if (iDesiredZoom != m_iLastZoom) {
+		m_terrainManager.ClearQueueOnly();
+		m_iLastZoom = m_iCurrentZoom = iDesiredZoom;
+	}
+
+	double fScale = WorldMath::GetScaleFactor(m_iCurrentZoom, m_config.mapCfg); // Používáme m_config
+	double fTileW = WorldMath::GetTileWidth(m_iCurrentZoom, m_config.mapCfg);
+	double fTileL = WorldMath::GetTileLength(m_iCurrentZoom, m_config.mapCfg);
+	double fStartX = (double)m_config.mapCfg.StartTileXRef * fScale;
+	double fStartY = (double)m_config.mapCfg.StartTileYRef * fScale;					
+	int iCx = (int)(fStartX + (m_camera.pos.x / fTileW));
+	int iCy = (int)(fStartY - (m_camera.pos.z / fTileL));
+	m_iVisibleTileX = iCx;
+	m_iVisibleTileY = iCy;
+
+	std::vector<TileKey> vecNeeded;
+	for (int y = iCy - m_config.mapCfg.Radius; y <= iCy + m_config.mapCfg.Radius; ++y) {
+		for (int x = iCx - m_config.mapCfg.Radius; x <= iCx + m_config.mapCfg.Radius; ++x) {
+			vecNeeded.push_back({ x, y, m_iCurrentZoom });
+		}
+	}
+
+	XMMATRIX viewInv = XMMatrixInverse(nullptr, m_camera.GetViewMatrix());
+	XMVECTOR camFwd = viewInv.r[2];
+	double lookX = XMVectorGetX(camFwd);
+	double lookZ = XMVectorGetZ(camFwd);
+
+	// Predict focus distance based on camera speed (simple estimation here)
+	double focusDist = 5000.0;
+	double focusX = m_camera.pos.x + lookX * focusDist;
+	double focusZ = m_camera.pos.z + lookZ * focusDist;
+
+	std::sort(vecNeeded.begin(), vecNeeded.end(), [&](const TileKey& a, const TileKey& b) {
+		Vector3d posA = WorldMath::GetTileOrigin(a.iX, a.iY, a.iZoom, m_config.mapCfg);
+		Vector3d posB = WorldMath::GetTileOrigin(b.iX, b.iY, b.iZoom, m_config.mapCfg);
+		double distA = (posA.x - focusX) * (posA.x - focusX) + (posA.z - focusZ) * (posA.z - focusZ);
+		double distB = (posB.x - focusX) * (posB.x - focusX) + (posB.z - focusZ) * (posB.z - focusZ);
+		return distA < distB;
+		});
+
+	m_terrainManager.Update(vecNeeded, m_fTerrainExaggeration);
 }
 
 
@@ -594,6 +691,9 @@ void Engine::OnRender() {
 	// --- SHADOW PASS ---
 	if (m_shadowMap && castShadows) {
 		m_rhi->BeginShadowPass(m_shadowMap.get());
+
+		m_terrainManager.RenderShadows(m_globalBuffer.get());
+
 		m_rhi->SetPipeline(m_shadowPipeline.get());
 		m_rhi->SetGlobalUniforms(m_globalBuffer.get(), &shadowGlobal, sizeof(GlobalData));
 
@@ -646,6 +746,8 @@ void Engine::OnRender() {
 			}
 		}
 	}
+
+	m_terrainManager.Render(m_globalBuffer.get());
 
 	for (const auto& batch : staticBatches) {
 		batch.mat->BindTextures(m_rhi.get());

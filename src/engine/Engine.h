@@ -2,6 +2,8 @@
 
 #include "engine/EngineDependencies.h"
 #include "engine/environment/VolumetricClouds.h"
+#include "engine/terrain/TerrainManager.h"
+
 /// ///////////////////////////////////////////////////////////////////////////
 /// --- ENGINE class ---
 /// ///////////////////////////////////////////////////////////////////////////
@@ -13,6 +15,7 @@ private:
     int m_apiChoice;
     std::unique_ptr<RHI> m_rhi;
 
+    EngineConfig m_config;
     AssetRegistry m_assets;
     SceneManager m_sceneManager;
 
@@ -81,7 +84,14 @@ private:
     std::unique_ptr<Atmosphere> m_atmosphere;
     std::unique_ptr<VolumetricClouds> m_Clouds;
 
-    
+    // --- TERRAIN ---
+    TerrainManager m_terrainManager;
+    int m_iCurrentZoom = 13;
+    int m_iLastZoom = -1;
+    float m_fTerrainExaggeration = 1.0f;
+    float m_fCurrentGroundHeight = 0.0f;
+    int m_iVisibleTileX = 0;
+    int m_iVisibleTileY = 0;
     FpsCamera m_camera;
 
     ImGui::FileBrowser m_loadDialog;
@@ -96,7 +106,10 @@ public:
     ~Engine();
     bool OnInit(HINSTANCE hInstance, int nCmdShow);
     void Run();
+    int CalculateBestZoom(double fAltitude);
+    void CheckCollisions();
 
+public:
 private:
     void LoadResourcesAndScene();
     void BuildHardcodedScene();

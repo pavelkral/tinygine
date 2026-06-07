@@ -4,9 +4,25 @@
 #include "rhi/GraphicsTypes.h"
 #include "rhi/utils/MipGenerator.h"
 
-enum class BufferType { Vertex, Index, Constant, Instance, ComputeUAV };
-class RHIBuffer { public: UINT stride = 0; virtual ~RHIBuffer(); };
-class RHITexture { public: int width = 0; int height = 0; virtual ~RHITexture(); };
+enum class BufferType { 
+    Vertex, 
+    Index, 
+    Constant, 
+    Instance, 
+    ComputeUAV 
+};
+class RHIBuffer { 
+public: 
+    UINT stride = 0; 
+    virtual ~RHIBuffer(); 
+};
+class RHITexture { 
+public: 
+    int width = 0; 
+    int height = 0; 
+    uint32_t bindlessIndex = 0;
+    virtual ~RHITexture(); 
+};
 class RHIPipeline { public: virtual ~RHIPipeline(); };
 
 class RHI {
