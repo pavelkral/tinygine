@@ -714,18 +714,6 @@ void Engine::OnRender() {
 		if (m_skybox) m_skybox->Render(m_rhi.get(), m_globalBuffer.get(), gData);
 	}
 
-	//if (m_enableClouds && m_Clouds) {
-	//	ZoneScopedNC("Draw Clouds", 0xFFFFFF);
-
-	//	float time = (float)ImGui::GetTime();
-	//	SM::Vector3 sunDir = { dirLightDir.x, dirLightDir.y, dirLightDir.z};
-	//	SM::Vector3 camPos = { (float)m_camera.pos.x, (float)m_camera.pos.y, (float)m_camera.pos.z };
-	//	SM::Matrix smView(view); SM::Matrix smProj(proj);
-
-	//	// POSÍLÁME m_rtPos (G-Buffer) MÍSTO HLOUBKY!
-	//	m_Clouds->Render(m_rhi.get(), m_cloudUniformBuffer.get(), smView, smProj, camPos, sunDir, time, m_rtPos.get());
-	//}
-	//// ------------------------------
 
 	for (const auto& obj : m_sceneManager.m_objects) {
 		if (auto psc = obj->GetComponent<ParticleSystemComponent>()) psc->Render(m_globalBuffer.get(), gData);

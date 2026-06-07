@@ -1,4 +1,4 @@
-#include "engine/core/debug_assimp_model.h"
+#include "engine/core/DebugAssimp.h"
 
 #include <assimp/anim.h>
 #include <assimp/material.h>
@@ -13,7 +13,7 @@ void DebugPrintAssimpScene(const aiScene* scene, const std::string& filepath) {
         return;
     }
 
-    std::cout << "\n======================================================\n";
+    std::cout << "\n====================================================\n";
     std::cout << "ASSIMP DEBUG REPORT: " << filepath << "\n";
     std::cout << "======================================================\n";
 

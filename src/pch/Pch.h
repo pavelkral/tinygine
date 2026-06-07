@@ -63,7 +63,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
-#include "engine/core/debug_assimp_model.h"
+#include "engine/core/DebugAssimp.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>

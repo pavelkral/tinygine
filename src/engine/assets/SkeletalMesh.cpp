@@ -1,6 +1,6 @@
 #include "engine/EngineDependencies.h"
 #include "engine/assets/SkeletalMesh.h"
-
+#include "engine/core/DebugAssimp.h"
 SkeletalMesh::SkeletalMesh(RHI* rhi, const std::string& path, PipelineConfig skelConfig) {
 	masterSolidPipeline = rhi->CreatePipeline(skelConfig);
 	PipelineConfig transCfg = skelConfig;
@@ -20,6 +20,7 @@ SkeletalMesh::SkeletalMesh(RHI* rhi, const std::string& path, PipelineConfig ske
 		std::cerr << "[SkeletalMesh] ASSIMP ERROR: " << importer.GetErrorString() << "\n"; return;
 	}
 
+
 	std::string normalizedPath = path;
 	std::replace(normalizedPath.begin(), normalizedPath.end(), '\\', '/');
 
@@ -28,7 +29,7 @@ SkeletalMesh::SkeletalMesh(RHI* rhi, const std::string& path, PipelineConfig ske
 	if (lastSlash != std::string::npos) {
 		directory = normalizedPath.substr(0, lastSlash);
 	}
-
+	DebugPrintAssimpScene(scene, directory);
 	ProcessNode(rhi, scene->mRootNode, scene, SM::Matrix::Identity, skelConfig, directory);
 }
 
