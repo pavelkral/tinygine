@@ -9,7 +9,13 @@
 /// Vulkan IMPLEMENTATION
 /// =============================================================
 /// =============================================================
-
+struct VkUploadHeap {
+	VkBuffer buf = VK_NULL_HANDLE;
+	VmaAllocation alloc = VK_NULL_HANDLE;
+	uint8_t* cpu = nullptr;
+	VkDeviceSize cap = 0;
+	VkDeviceSize cursor = 0;
+};
 
 class RHI_Vulkan : public RHI {
 private:
@@ -62,13 +68,7 @@ private:
 	// Streamed textures (terrain) stage into a per-frame ring buffer and record
 	// their copies into a per-frame upload command buffer, which is batched into
 	// the frame's submit. Replaces the per-texture SingleTimeCommand + queue idle.
-	struct VkUploadHeap {
-		VkBuffer buf = VK_NULL_HANDLE;
-		VmaAllocation alloc = VK_NULL_HANDLE;
-		uint8_t* cpu = nullptr;
-		VkDeviceSize cap = 0;
-		VkDeviceSize cursor = 0;
-	};
+
 	std::vector<VkUploadHeap> m_uploadHeaps;      // per frame
 	std::vector<VkCommandBuffer> uploadCmds;      // per frame
 	std::vector<VkSemaphore> uploadSemaphores;    // per frame: upload submit -> render submit
