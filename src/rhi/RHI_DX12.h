@@ -4,10 +4,18 @@
 #include "rhi/RHI.h"
 #include "rhi/backend_types/DX12Types.h"
 
+/// =============================================================
+/// =============================================================
+/// DX12 IMPLEMENTATION
+/// =============================================================
+/// =============================================================
+
+
 /// Persistent, per-frame mapped UPLOAD ring buffer. Allocations are a simple
 /// cursor bump (no per-call resource creation), reset once per frame after the
 /// GPU is known to be done with that frame's slot. Replaces the old pattern of
 /// creating a fresh staging buffer + command list + full GPU flush per texture.
+
 struct LinearUploadHeap {
     ComPtr<ID3D12Resource> buf;
     uint8_t* cpu = nullptr;
@@ -24,12 +32,6 @@ struct LinearUploadHeap {
     void Reset() { cursor = 0; }
     Alloc Allocate(UINT64 size, UINT64 align);
 };
-
-/// =============================================================
-/// =============================================================
-/// DX12 IMPLEMENTATION
-/// =============================================================
-/// =============================================================
 
 class RHI_DX12 : public RHI {
 private:

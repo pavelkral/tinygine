@@ -9,6 +9,7 @@
 /// Vulkan IMPLEMENTATION
 /// =============================================================
 /// =============================================================
+ 
 struct VkUploadHeap {
 	VkBuffer buf = VK_NULL_HANDLE;
 	VmaAllocation alloc = VK_NULL_HANDLE;
