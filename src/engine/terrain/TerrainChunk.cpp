@@ -7,16 +7,24 @@ void TerrainChunk::CreateFromData(RHI* rhi, const LoadedTileData& data, const Ma
     m_CpuHeightData = data.m_HeightData;
     m_CpuHeightW = data.m_HeightW;
     m_CpuHeightH = data.m_HeightH;
+    m_HeightFormat = DXGI_FORMAT_R16_UNORM;
+    m_ColorFormat = data.m_ColorFormat;
+    m_ColorMipLevels = data.m_MipLevels;
 
     // 1. HEIGHTMAP (Create texture from raw data using RHI)
     const uint8_t* pStart = reinterpret_cast<const uint8_t*>(data.m_HeightData.data());
     std::vector<uint8_t> byteData(pStart, pStart + data.m_HeightData.size() * 2);
 
-    // Note: Assuming your RHI has a CreateTextureFromData method. Adjust if named differently.
-    m_TexHeight = rhi->CreateTextureFromData(byteData.data(), data.m_HeightW, data.m_HeightH, DXGI_FORMAT_R16_UNORM);
+    m_TexHeight = rhi->CreateTextureFromData(byteData.data(), byteData.size(),
+                                             data.m_HeightW, data.m_HeightH,
+                                             DXGI_FORMAT_R16_UNORM);
 
     // 2. COLOR MAP (Create texture from raw DDS/PNG using RHI)
-    m_TexColor = rhi->CreateTextureFromData(data.m_ColorData.data(), data.m_ColorW, data.m_ColorH, data.m_ColorFormat, data.m_MipLevels);
+    m_TexColor = rhi->CreateTextureFromData(data.m_ColorData.data(),
+                                            data.m_ColorData.size(),
+                                            data.m_ColorW, data.m_ColorH,
+                                            data.m_ColorFormat,
+                                            data.m_MipLevels);
 
     if (m_TexHeight && m_TexColor) {
         m_bValid = true;

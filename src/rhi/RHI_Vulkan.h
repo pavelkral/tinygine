@@ -47,6 +47,36 @@ private:
 	VkDescriptorPool imguiPool = VK_NULL_HANDLE;
 	VkSampler mainSampler = VK_NULL_HANDLE;
 	VkSampler shadowSampler = VK_NULL_HANDLE;
+	std::vector<VkDescriptorImageInfo> m_bindlessImageInfos;
+	uint32_t m_bindlessTextureCount = 0;
+
+	// --- BINDLESS SLOT RECYCLING (deferred until the frame fence signals) ---
+	std::vector<uint32_t> m_freeBindlessSlots;
+	std::vector<std::vector<uint32_t>> m_deferredBindlessFree; // per frame
+
+	// --- DEFERRED GPU RESOURCE DESTRUCTION ---
+	struct RetiredImage { VkImage image; VkImageView view; VmaAllocation alloc; };
+	std::vector<std::vector<RetiredImage>> m_imageGarbage; // per frame
+
+	// --- ASYNC STREAMING UPLOAD ---
+	// Streamed textures (terrain) stage into a per-frame ring buffer and record
+	// their copies into a per-frame upload command buffer, which is batched into
+	// the frame's submit. Replaces the per-texture SingleTimeCommand + queue idle.
+	struct VkUploadHeap {
+		VkBuffer buf = VK_NULL_HANDLE;
+		VmaAllocation alloc = VK_NULL_HANDLE;
+		uint8_t* cpu = nullptr;
+		VkDeviceSize cap = 0;
+		VkDeviceSize cursor = 0;
+	};
+	std::vector<VkUploadHeap> m_uploadHeaps;      // per frame
+	std::vector<VkCommandBuffer> uploadCmds;      // per frame
+	std::vector<VkSemaphore> uploadSemaphores;    // per frame: upload submit -> render submit
+	bool uploadOpen = false;
+
+	struct UploadAlloc { VkBuffer buf; uint8_t* cpu; VkDeviceSize offset; };
+	void OpenUploadCmd();
+	UploadAlloc AllocUpload(VkDeviceSize size, VkDeviceSize align);
 
 	// --- STATE TRACKING (Bound resources) ---
 	VKTexture* currentTextures[8] = { nullptr };
@@ -120,8 +150,13 @@ private:
 	void CleanupSwapchain();
 	void CreateSwapchainResources(bool vsyncEnabled);
 	void BindGlobalDescriptors();
+	void RegisterBindlessTexture(VKTexture* tex);
 
 public:
+	// Called by ~VKTexture: retire its GPU image + bindless slot for deferred recycling.
+	void RetireVKTexture(VKTexture* t);
+	void FreeBindlessSlot(uint32_t index);
+
 	~RHI_Vulkan();
 	bool Init(HWND hWnd, int w, int h) override;
 	RHITexture* GetBackBuffer() override;
@@ -142,6 +177,7 @@ public:
 	void UpdateBuffer(RHIBuffer* b, const void* d, size_t s) override;
 	std::shared_ptr<RHITexture> CreateTexture(const std::wstring& path) override;
 	std::shared_ptr<RHITexture> CreateDDSTexture(const std::wstring& path) override;
+	std::shared_ptr<RHITexture> CreateTextureFromData(const void* data, size_t dataSize, int width, int height, DXGI_FORMAT format, int mipLevels = 1) override;
 	void ImGuiInit(HWND hWnd) override;
 	void ImGuiBegin() override;
 	void ImGuiEnd() override;
@@ -167,7 +203,6 @@ public:
 	void SetComputeBufferUAV(RHIBuffer* buffer, int slot) override;
 	void ComputeBufferBarrier(RHIBuffer* buffer) override;
 };
-
 
 
 

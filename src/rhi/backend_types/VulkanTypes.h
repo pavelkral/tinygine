@@ -3,6 +3,8 @@
 #include "pch/Pch.h"
 #include "rhi/RHI.h"
 
+class RHI_Vulkan; // fwd decl for deferred destruction / bindless slot recycling
+
 struct VKBuffer : public RHIBuffer {
     VkBuffer buf = VK_NULL_HANDLE;
     VmaAllocation alloc = VK_NULL_HANDLE;
@@ -21,6 +23,14 @@ struct VKTexture : public RHITexture {
     VkDescriptorImageInfo imageInfo = {};
     VkDescriptorImageInfo uavInfo = {};
     VkFramebuffer shadowFramebuffer = VK_NULL_HANDLE;
+
+    // Deferred destruction + bindless slot recycling (set by the creating RHI).
+    // ownsImage textures get their image/view/alloc retired to the owner's
+    // per-frame garbage bin; backbuffers leave this null so they are untouched.
+    RHI_Vulkan* ownerRHI = nullptr;
+    bool ownsImage = false;
+    bool hasBindlessSlot = false;
+    ~VKTexture();
 };
 
 struct VKPipeline : public RHIPipeline {
@@ -28,6 +38,6 @@ struct VKPipeline : public RHIPipeline {
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout descLayout = VK_NULL_HANDLE;
     bool isSkinned = false;
+    bool usesBindlessTextures = false;
 };
-
 

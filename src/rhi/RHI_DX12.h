@@ -4,6 +4,27 @@
 #include "rhi/RHI.h"
 #include "rhi/backend_types/DX12Types.h"
 
+/// Persistent, per-frame mapped UPLOAD ring buffer. Allocations are a simple
+/// cursor bump (no per-call resource creation), reset once per frame after the
+/// GPU is known to be done with that frame's slot. Replaces the old pattern of
+/// creating a fresh staging buffer + command list + full GPU flush per texture.
+struct LinearUploadHeap {
+    ComPtr<ID3D12Resource> buf;
+    uint8_t* cpu = nullptr;
+    UINT64 capacity = 0;
+    UINT64 cursor = 0;
+
+    struct Alloc {
+        ID3D12Resource* res;
+        uint8_t* cpu;
+        UINT64 offset;
+    };
+
+    void Init(ID3D12Device* dev, UINT64 size);
+    void Reset() { cursor = 0; }
+    Alloc Allocate(UINT64 size, UINT64 align);
+};
+
 /// =============================================================
 /// =============================================================
 /// DX12 IMPLEMENTATION
@@ -54,12 +75,44 @@ private:
     ID3D12PipelineState *lastPSO = nullptr;
     ID3D12RootSignature *lastRS = nullptr;
     ComPtr<ID3D12RootSignature> computeRS;
+    // Recycled SRV heap slots (bindless indices) returned by destroyed textures.
+    std::vector<UINT> m_freeSrvSlots;
+
+    // --- ASYNC STREAMING UPLOAD (dedicated COPY queue) ---
+    // Streamed textures (terrain tiles) record their copies here once per frame
+    // instead of stalling the GPU per-texture. Flushed in BeginFrame; the main
+    // queue waits on the copy fence so draws see finished data.
+    ComPtr<ID3D12CommandQueue> copyQueue;
+    ComPtr<ID3D12CommandAllocator> copyAlc[FrameCount];
+    ComPtr<ID3D12GraphicsCommandList> copyCmd;
+    ComPtr<ID3D12Fence> copyFence;
+    UINT64 copyFenceVal = 0;
+    HANDLE copyEvt = nullptr;
+    bool copyOpen = false;
+    LinearUploadHeap m_uploadHeap[FrameCount];
+
+    // --- DEFERRED DESTRUCTION ---
+    // Slots and GPU resources retired this frame are only recycled / released
+    // once the frame index cycles back (GPU guaranteed done), avoiding
+    // use-after-free of descriptors/resources still referenced in flight.
+    std::vector<UINT> m_deferredSrvFree[FrameCount];
+    std::vector<ComPtr<ID3D12Resource>> m_resourceGarbage[FrameCount];
+
+    void OpenCopyList();
+    void FlushCopyList();
+
     void Sync();
     void TransitionResource(DX12Texture *tex, D3D12_RESOURCE_STATES targetState);
     void TransitionBuffer(ID3D12Resource *res, D3D12_RESOURCE_STATES before,
                           D3D12_RESOURCE_STATES after);
+    D3D12_CPU_DESCRIPTOR_HANDLE AllocateSrvDescriptor(DX12Texture *tex);
 
 public:
+    // Retire a bindless SRV slot (called by ~DX12Texture). Recycled later.
+    void FreeSrvDescriptor(UINT index);
+    // Keep a GPU resource alive until the current frame slot is recycled.
+    void DeferResourceRelease(ComPtr<ID3D12Resource> res);
+
     bool Init(HWND hWnd, int width, int height) override;
     void GetSize(int &outW, int &outH) const override;
     void Resize(int newW, int newH) override;
@@ -84,6 +137,10 @@ public:
     std::shared_ptr<RHITexture>
     CreateDDSTexture(const std::wstring &path) override;
     std::shared_ptr<RHITexture> CreateTexture(const std::wstring &path) override;
+    std::shared_ptr<RHITexture> CreateTextureFromData(const void *data, size_t dataSize,
+                                                      int width, int height,
+                                                      DXGI_FORMAT format,
+                                                      int mipLevels = 1) override;
     void SetTexture(RHITexture *t, int slot) override;
     std::shared_ptr<RHIBuffer> CreateBuffer(BufferType type, const void *data,
                                             size_t size,

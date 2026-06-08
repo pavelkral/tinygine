@@ -163,8 +163,7 @@ void Engine::LoadResourcesAndScene() {
 	RecreateRenderTargets();
 	InitSSAO();
 
-	MapConfig mapCfg;
-	m_terrainManager.Init(m_rhi.get(), mapCfg);
+	m_terrainManager.Init(m_rhi.get(), m_config.mapCfg);
 	m_terrainManager.Start();
 
 	// 1. PIPELINE & BUFFERS 
@@ -191,7 +190,7 @@ void Engine::LoadResourcesAndScene() {
 	m_brdfLut = m_rhi->CreateDDSTexture(L"assets/textures/ibl/xBrdf.dds");
 
 	m_globalBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, sizeof(GlobalData) * 500);
-	m_instanceBuffer = m_rhi->CreateBuffer(BufferType::Instance, nullptr, sizeof(ObjectData) * 15000);
+	m_instanceBuffer = m_rhi->CreateBuffer(BufferType::Instance, nullptr, sizeof(ObjectData) * 15000, sizeof(ObjectData));
 	m_computeUniformBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, 256 * 15000);
 	m_skinnedObjectBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, sizeof(SkinnedObjectData) * 5000);
 	m_boneBuffer = m_rhi->CreateBuffer(BufferType::Constant, nullptr, sizeof(SM::Matrix) * MAX_BONES * 5000);
@@ -501,12 +500,18 @@ void Engine::OnUpdate(float dt) {
 	}
 
 	// --- TERRAIN STREAMING LOGIC ---
-	int iDesiredZoom = CalculateBestZoom(m_camera.pos.y);
-	iDesiredZoom = std::clamp(iDesiredZoom, 11, 13);
+	if (m_bAutoTerrainZoom) {
+		int iDesiredZoom = CalculateBestZoom(m_camera.pos.y);
+		iDesiredZoom = std::clamp(iDesiredZoom, 11, 13);
 
-	if (iDesiredZoom != m_iLastZoom) {
+		if (iDesiredZoom != m_iLastZoom) {
+			m_terrainManager.ClearQueueOnly();
+			m_iLastZoom = m_iCurrentZoom = iDesiredZoom;
+		}
+	}
+	else if (m_iCurrentZoom != m_iLastZoom) {
 		m_terrainManager.ClearQueueOnly();
-		m_iLastZoom = m_iCurrentZoom = iDesiredZoom;
+		m_iLastZoom = m_iCurrentZoom;
 	}
 
 	double fScale = WorldMath::GetScaleFactor(m_iCurrentZoom, m_config.mapCfg); // Používáme m_config
@@ -554,7 +559,7 @@ void Engine::OnRender() {
 	float aspect = (curH == 0) ? 1.0f : static_cast<float>(curW) / static_cast<float>(curH);
 
 	XMMATRIX view = m_camera.GetViewMatrix();
-	XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.1f, 20000.0f);
+	XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.1f, 200000.0f);
 	ma_engine_listener_set_position(&m_audioEngine, 0, m_camera.pos.x, m_camera.pos.y, m_camera.pos.z);
 
 	XMMATRIX invView = XMMatrixInverse(nullptr, view);
@@ -746,6 +751,12 @@ void Engine::OnRender() {
 			}
 		}
 	}
+
+	// Vulkan: the terrain re-binds the global UBO via SetGlobalUniforms(buf, nullptr, 0),
+	// so make sure the most recent global upload here is the CAMERA data (not the
+	// shadow pass' light matrices). DX12 binds the root CBV directly and is unaffected.
+	if (m_apiChoice == 2)
+		m_rhi->SetGlobalUniforms(m_globalBuffer.get(), &gData, sizeof(GlobalData));
 
 	m_terrainManager.Render(m_globalBuffer.get());
 
@@ -1180,6 +1191,7 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 			ImGui::DockBuilderDockWindow("Stats", dock_stats_id);
 			ImGui::DockBuilderDockWindow("Inspector", dock_right_id);
 			ImGui::DockBuilderDockWindow("Post-Processing", dock_right_bottom_id);
+			ImGui::DockBuilderDockWindow("Terrain", dock_right_bottom_id);
 			ImGui::DockBuilderDockWindow("Asset Browser", dock_bottom_id);
 
 			ImGui::DockBuilderFinish(dockspace_id);
@@ -1389,8 +1401,23 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	ImGui::End();
 
 	ImGui::Begin("Camera Settings");
-	ImGui::SliderFloat("Speed", &m_camera.speed, 1.0f, 100.0f, "%.1f");
+	// Terrain is rendered 1:1, so 1 world unit = 1 meter and the free-fly camera
+	// speed is in m/s. Show the knots equivalent (1 m/s = 1.94384 kts).
+	ImGui::SliderFloat("Speed (m/s)", &m_camera.speed, 1.0f, 1500.0f, "%.1f");
+	ImGui::SameLine();
+	ImGui::Text("= %.1f kts", m_camera.speed * 1.94384f);
 	ImGui::SliderFloat("Sensitivity", &m_camera.sensitivity, 0.001f, 0.050f, "%.4f");
+
+	ImGui::Separator();
+	ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Camera position (vs origin 0)");
+	ImGui::Text("X: %10.2f m", m_camera.pos.x);
+	ImGui::Text("Y: %10.2f m  (altitude)", m_camera.pos.y);
+	ImGui::Text("Z: %10.2f m", m_camera.pos.z);
+	float distFromOrigin = sqrtf(m_camera.pos.x * m_camera.pos.x +
+	                             m_camera.pos.y * m_camera.pos.y +
+	                             m_camera.pos.z * m_camera.pos.z);
+	ImGui::Text("Distance from 0: %.1f m  (%.2f km)", distFromOrigin,
+	            distFromOrigin / 1000.0f);
 	ImGui::End();
 
 	ImGui::Begin("Simulation");
@@ -1431,6 +1458,13 @@ void Engine::RenderEditorUI(const ImGuiViewport* vp_imgui, float screenW, float 
 	}
 	if (m_enableClouds && m_Clouds) {
 		m_Clouds->DrawDebug();
+	}
+	Vector3d terrainCameraPos = { m_camera.pos.x, m_camera.pos.y, m_camera.pos.z };
+	if (m_terrainManager.DrawDebug(&m_config.mapCfg, &m_iCurrentZoom,
+		&m_bAutoTerrainZoom, &m_fTerrainExaggeration, m_iVisibleTileX,
+		m_iVisibleTileY, m_fCurrentGroundHeight, &terrainCameraPos)) {
+		m_terrainManager.ClearQueueOnly();
+		m_iLastZoom = -1;
 	}
 
 	ImGui::Begin("Inspector");

@@ -88,6 +88,7 @@ private:
     TerrainManager m_terrainManager;
     int m_iCurrentZoom = 13;
     int m_iLastZoom = -1;
+    bool m_bAutoTerrainZoom = true;
     float m_fTerrainExaggeration = 1.0f;
     float m_fCurrentGroundHeight = 0.0f;
     int m_iVisibleTileX = 0;

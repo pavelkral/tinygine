@@ -4,6 +4,8 @@
 #include "rhi/GraphicsTypes.h"
 #include "rhi/utils/MipGenerator.h"
 
+static constexpr uint32_t RHI_BINDLESS_TEXTURE_CAPACITY = 4096;
+
 enum class BufferType { 
     Vertex, 
     Index, 
@@ -42,6 +44,7 @@ public:
     virtual std::shared_ptr<RHITexture> CreateTexture(const std::wstring& path) = 0;
     virtual std::shared_ptr<RHITexture> CreateShadowTexture(int width, int height) = 0;
     virtual std::shared_ptr<RHITexture> CreateDDSTexture(const std::wstring& path) = 0;
+    virtual std::shared_ptr<RHITexture> CreateTextureFromData(const void* data, size_t dataSize, int width, int height, DXGI_FORMAT format, int mipLevels = 1) = 0;
 
     // ---  MRT And OFFSCREEN ---
     virtual std::shared_ptr<RHITexture> CreateRenderTarget(int w, int h, int format) = 0;
@@ -81,5 +84,4 @@ public:
     virtual void SetComputeBufferUAV(RHIBuffer* buffer, int slot) = 0;
     virtual void ComputeBufferBarrier(RHIBuffer* buffer) = 0;
 };
-
 

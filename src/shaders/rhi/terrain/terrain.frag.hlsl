@@ -1,4 +1,6 @@
-Texture2D g_Textures[] : register(t0, space0);
+#define MAX_BINDLESS_TEXTURES 4096
+
+Texture2D g_Textures[MAX_BINDLESS_TEXTURES] : register(t0, space0);
 SamplerState g_Sampler : register(s0);
 
 struct PS_IN
@@ -27,8 +29,10 @@ PixelOutput PSMain(PS_IN input)
     if (realNormal.y < 0.0)
         realNormal = -realNormal; // Make sure it points up
 
-    // Bindless color sampling
-    float4 color = g_Textures[NonUniformResourceIndex(input.colorIdx)].Sample(g_Sampler, input.uv);
+    // Bindless color sampling. Clamp UV inside the tile (same as the heightmap)
+    // so the WRAP sampler never pulls the opposite edge in at the seam.
+    float2 cUV = clamp(input.uv, 0.5 / 256.0, 1.0 - 0.5 / 256.0);
+    float4 color = g_Textures[NonUniformResourceIndex(input.colorIdx)].Sample(g_Sampler, cUV);
 
     PixelOutput output;
     output.Color = color;

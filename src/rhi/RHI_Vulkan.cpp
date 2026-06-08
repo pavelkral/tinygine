@@ -1,5 +1,6 @@
 #include "rhi/RHI_Vulkan.h"
 #include "engine/EngineDependencies.h"
+#include "engine/terrain/TerrainTypes.h"
 #include "rhi/utils/ShaderCompiler.h"
 VKAPI_ATTR VkBool32 VKAPI_CALL RHI_Vulkan::VulkanDebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -122,6 +123,119 @@ std::shared_ptr<RHITexture> RHI_Vulkan::CreateDummyTexture(bool isCube) {
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     tex->uavInfo = {mainSampler, tex->view, VK_IMAGE_LAYOUT_GENERAL};
     return tex;
+}
+
+static bool VKIsBlockCompressed(DXGI_FORMAT format) {
+    return format == DXGI_FORMAT_BC1_UNORM || format == DXGI_FORMAT_BC3_UNORM;
+}
+
+static uint32_t VKBytesPerBlock(DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R16_UNORM:
+        return 2;
+    case DXGI_FORMAT_BC1_UNORM:
+        return 8;
+    case DXGI_FORMAT_BC3_UNORM:
+        return 16;
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    default:
+        return 4;
+    }
+}
+
+static VkFormat VKFormatFromDXGI(DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R16_UNORM:
+        return VK_FORMAT_R16_UNORM;
+    case DXGI_FORMAT_BC1_UNORM:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case DXGI_FORMAT_BC3_UNORM:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    default:
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    }
+}
+
+static void VKMipLayout(DXGI_FORMAT format, uint32_t width, uint32_t height,
+                        uint32_t &rowBytes, uint32_t &rowCount) {
+    if (VKIsBlockCompressed(format)) {
+        rowBytes = std::max<uint32_t>(1, (width + 3) / 4) * VKBytesPerBlock(format);
+        rowCount = std::max<uint32_t>(1, (height + 3) / 4);
+    } else {
+        rowBytes = width * VKBytesPerBlock(format);
+        rowCount = height;
+    }
+}
+
+void RHI_Vulkan::RegisterBindlessTexture(VKTexture* tex) {
+    if (!tex)
+        return;
+
+    if (m_bindlessImageInfos.empty()) {
+        VkDescriptorImageInfo dummy = tex->imageInfo;
+        if (m_dummy2D) {
+            dummy = static_cast<VKTexture*>(m_dummy2D.get())->imageInfo;
+        }
+        m_bindlessImageInfos.resize(RHI_BINDLESS_TEXTURE_CAPACITY, dummy);
+    }
+
+    uint32_t idx;
+    if (!m_freeBindlessSlots.empty()) {
+        // Reuse a slot freed by a destroyed (e.g. evicted terrain) texture so
+        // the bindless index pool does not grow without bound.
+        idx = m_freeBindlessSlots.back();
+        m_freeBindlessSlots.pop_back();
+    } else {
+        if (m_bindlessTextureCount >= RHI_BINDLESS_TEXTURE_CAPACITY)
+            return;
+        idx = m_bindlessTextureCount++;
+    }
+
+    tex->bindlessIndex = idx;
+    m_bindlessImageInfos[idx] = tex->imageInfo;
+    tex->ownerRHI = this;
+    tex->hasBindlessSlot = true;
+}
+
+void RHI_Vulkan::FreeBindlessSlot(uint32_t index) {
+    // Defer recycling until this frame slot cycles back (GPU done with it).
+    m_deferredBindlessFree[currentFrame].push_back(index);
+    // Point the descriptor entry at the dummy so nothing samples a stale view.
+    if (index < m_bindlessImageInfos.size() && m_dummy2D)
+        m_bindlessImageInfos[index] =
+            static_cast<VKTexture *>(m_dummy2D.get())->imageInfo;
+}
+
+void RHI_Vulkan::RetireVKTexture(VKTexture *t) {
+    if (t->hasBindlessSlot)
+        FreeBindlessSlot(t->bindlessIndex);
+    if (t->ownsImage)
+        m_imageGarbage[currentFrame].push_back({t->image, t->view, t->alloc});
+}
+
+RHI_Vulkan::UploadAlloc RHI_Vulkan::AllocUpload(VkDeviceSize size,
+                                                VkDeviceSize align) {
+    VkUploadHeap &h = m_uploadHeaps[currentFrame];
+    VkDeviceSize aligned = (h.cursor + (align - 1)) & ~(align - 1);
+    if (aligned + size > h.cap)
+        aligned = 0; // wrap (heap is sized for a full frame's uploads)
+    h.cursor = aligned + size;
+    return {h.buf, h.cpu + aligned, aligned};
+}
+
+void RHI_Vulkan::OpenUploadCmd() {
+    if (uploadOpen)
+        return;
+    VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(uploadCmds[currentFrame], &bi); // implicit reset (pool has RESET bit)
+    uploadOpen = true;
+}
+
+VKTexture::~VKTexture() {
+    if (ownerRHI)
+        ownerRHI->RetireVKTexture(this);
 }
 
 void RHI_Vulkan::CleanupSwapchain() {
@@ -305,16 +419,28 @@ void RHI_Vulkan::BindGlobalDescriptors() {
 
     // 4. Textures
     VkDescriptorImageInfo imgInfos[8];
-    for (int i = 0; i < 8; i++) {
-        if (currentTextures[i]) {
-            imgInfos[i] = currentTextures[i]->imageInfo;
-        } else {
-            imgInfos[i] = static_cast<VKTexture *>(m_dummy2D.get())->imageInfo;
+    if (currentPipeline->usesBindlessTextures) {
+        if (m_bindlessImageInfos.empty()) {
+            VkDescriptorImageInfo dummy =
+                static_cast<VKTexture *>(m_dummy2D.get())->imageInfo;
+            m_bindlessImageInfos.resize(RHI_BINDLESS_TEXTURE_CAPACITY, dummy);
         }
         writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, newSet,
-                          static_cast<uint32_t>(3 + i), 0, 1,
-                          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &imgInfos[i], nullptr,
-                          nullptr});
+                          3, 0, RHI_BINDLESS_TEXTURE_CAPACITY,
+                          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                          m_bindlessImageInfos.data(), nullptr, nullptr});
+    } else {
+        for (int i = 0; i < 8; i++) {
+            if (currentTextures[i]) {
+                imgInfos[i] = currentTextures[i]->imageInfo;
+            } else {
+                imgInfos[i] = static_cast<VKTexture *>(m_dummy2D.get())->imageInfo;
+            }
+            writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, newSet,
+                              static_cast<uint32_t>(3 + i), 0, 1,
+                              VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &imgInfos[i], nullptr,
+                              nullptr});
+        }
     }
 
     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()),
@@ -359,6 +485,25 @@ RHI_Vulkan::~RHI_Vulkan() {
     for (int i = 0; i < 8; i++) {
         if (renderFinishedSemaphores[i])
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+    }
+
+    // Drain deferred GPU resources (GPU is idle after the vkDeviceWaitIdle above)
+    for (auto &bin : m_imageGarbage) {
+        for (auto &r : bin) {
+            if (r.view)
+                vkDestroyImageView(device, r.view, nullptr);
+            if (r.image)
+                vmaDestroyImage(allocator, r.image, r.alloc);
+        }
+        bin.clear();
+    }
+    for (auto &uh : m_uploadHeaps) {
+        if (uh.buf)
+            vmaDestroyBuffer(allocator, uh.buf, uh.alloc);
+    }
+    for (auto s : uploadSemaphores) {
+        if (s)
+            vkDestroySemaphore(device, s, nullptr);
     }
 }
 
@@ -431,16 +576,24 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
 
     VkPhysicalDeviceFeatures features = {};
     features.samplerAnisotropy = VK_TRUE;
+    features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+    features.textureCompressionBC = VK_TRUE;
+
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT descriptorIndexing = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT};
+    descriptorIndexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 
     const char *deviceExts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-                                VK_KHR_MAINTENANCE1_EXTENSION_NAME};
+                                VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+                                VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME};
 
     VkDeviceCreateInfo deviceInfo = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
-    deviceInfo.enabledExtensionCount = 2;
+    deviceInfo.enabledExtensionCount = 3;
     deviceInfo.ppEnabledExtensionNames = deviceExts;
     deviceInfo.pEnabledFeatures = &features;
+    deviceInfo.pNext = &descriptorIndexing;
 
     vkCreateDevice(physDevice, &deviceInfo, nullptr, &device);
     vkGetDeviceQueue(device, 0, 0, &graphicsQueue);
@@ -629,7 +782,7 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         VkDescriptorPoolSize poolSizes[] = {
                                             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 5000},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 10000},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RHI_BINDLESS_TEXTURE_CAPACITY * 4},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 10000},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10000},
             {VK_DESCRIPTOR_TYPE_SAMPLER, 2000}};
@@ -649,6 +802,8 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     samplerInfo.magFilter = VK_FILTER_LINEAR;
     samplerInfo.minFilter = VK_FILTER_LINEAR;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    // REPEAT: needed by tiled model textures (e.g. the floor). The terrain
+    // avoids the wrap at tile edges by clamping its UV inside the shader.
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.maxAnisotropy = 16.0f;
@@ -683,6 +838,42 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     }
     for (int i = 0; i < 8; i++) {
         vkCreateSemaphore(device, &semInfo, nullptr, &renderFinishedSemaphores[i]);
+    }
+
+    // --- ASYNC STREAMING UPLOAD: per-frame ring staging + upload cmd buffers ---
+    m_deferredBindlessFree.resize(MAX_FRAMES_IN_FLIGHT);
+    m_imageGarbage.resize(MAX_FRAMES_IN_FLIGHT);
+
+    uploadCmds.resize(MAX_FRAMES_IN_FLIGHT);
+    VkCommandBufferAllocateInfo upAlloc = {
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    upAlloc.commandPool = cmdPool;
+    upAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    upAlloc.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
+    vkAllocateCommandBuffers(device, &upAlloc, uploadCmds.data());
+
+    uploadSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    {
+        VkSemaphoreCreateInfo si = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+            vkCreateSemaphore(device, &si, nullptr, &uploadSemaphores[i]);
+    }
+
+    m_uploadHeaps.resize(MAX_FRAMES_IN_FLIGHT);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VkUploadHeap &uh = m_uploadHeaps[i];
+        uh.cap = 128ull * 1024 * 1024; // 128 MB per frame
+        uh.cursor = 0;
+        VkBufferCreateInfo bci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size = uh.cap;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo aci = {};
+        aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+        aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        vmaCreateBuffer(allocator, &bci, &aci, &uh.buf, &uh.alloc, nullptr);
+        VmaAllocationInfo ai;
+        vmaGetAllocationInfo(allocator, uh.alloc, &ai);
+        uh.cpu = static_cast<uint8_t *>(ai.pMappedData);
     }
 
     // Initialize dummy fallbacks
@@ -1033,6 +1224,7 @@ std::shared_ptr<RHIPipeline>
 RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
     auto p = std::make_shared<VKPipeline>();
     p->isSkinned = config.isSkinned;
+    p->usesBindlessTextures = config.useBindlessTextures;
 
     auto vS = ShaderCompiler::CompileVulkan(config.vsPath, "VSMain", "vs_6_0");
     if (vS.empty()) return p;
@@ -1043,31 +1235,53 @@ RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
         pS = ShaderCompiler::CompileVulkan(config.psPath, "PSMain", "ps_6_0");
     }
 
-    // Define generic layout mapping for modern PBR engine
-    VkDescriptorSetLayoutBinding bindings[13] = {};
-    bindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
-                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                   nullptr};
-    bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
-                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                   nullptr};
-    bindings[2] = {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
-                   VK_SHADER_STAGE_VERTEX_BIT, nullptr};
-
-    for (int i = 0; i <= 7; i++) {
-        bindings[3 + i] = {static_cast<uint32_t>(3 + i),
-                           VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1,
-                           VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    }
-
-    bindings[11] = {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
-                    VK_SHADER_STAGE_FRAGMENT_BIT, &mainSampler};
-    bindings[12] = {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
-                    VK_SHADER_STAGE_FRAGMENT_BIT, &shadowSampler};
-
     std::vector<VkDescriptorSetLayoutBinding> activeBindings;
-    for (int i = 0; i < 13; i++) {
-        activeBindings.push_back(bindings[i]);
+    if (config.useBindlessTextures) {
+        activeBindings.push_back({0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
+                                  VK_SHADER_STAGE_VERTEX_BIT |
+                                      VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  nullptr});
+        activeBindings.push_back({1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
+                                  VK_SHADER_STAGE_VERTEX_BIT |
+                                      VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  nullptr});
+        activeBindings.push_back({2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
+                                  VK_SHADER_STAGE_VERTEX_BIT, nullptr});
+        activeBindings.push_back({3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                                  RHI_BINDLESS_TEXTURE_CAPACITY,
+                                  VK_SHADER_STAGE_VERTEX_BIT |
+                                      VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  nullptr});
+        activeBindings.push_back({11, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
+                                  VK_SHADER_STAGE_VERTEX_BIT |
+                                      VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  &mainSampler});
+    } else {
+        // Define generic layout mapping for modern PBR engine
+        VkDescriptorSetLayoutBinding bindings[13] = {};
+        bindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       nullptr};
+        bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       nullptr};
+        bindings[2] = {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+
+        for (int i = 0; i <= 7; i++) {
+            bindings[3 + i] = {static_cast<uint32_t>(3 + i),
+                               VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1,
+                               VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        }
+
+        bindings[11] = {11, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, &mainSampler};
+        bindings[12] = {12, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, &shadowSampler};
+
+        for (int i = 0; i < 13; i++) {
+            activeBindings.push_back(bindings[i]);
+        }
     }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo = {
@@ -1123,7 +1337,51 @@ RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
     std::vector<VkVertexInputBindingDescription> bindDescs;
     std::vector<VkVertexInputAttributeDescription> attrDescs;
 
-    if (config.vsPath.find(L"fullscreen") == std::wstring::npos) {
+    if (config.isTerrain) {
+        VkVertexInputBindingDescription terrainBind = {};
+        terrainBind.binding = 0;
+        terrainBind.stride = sizeof(TerrainVertex);
+        terrainBind.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        bindDescs.push_back(terrainBind);
+
+        VkVertexInputBindingDescription instBind = {};
+        instBind.binding = 1;
+        instBind.stride = sizeof(TerrainInstanceGPU);
+        instBind.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+        bindDescs.push_back(instBind);
+
+        VkVertexInputAttributeDescription attr = {};
+        attr.location = 0;
+        attr.binding = 0;
+        attr.format = VK_FORMAT_R32G32B32_SFLOAT;
+        attr.offset = 0;
+        attrDescs.push_back(attr);
+        attr.location = 1;
+        attr.binding = 0;
+        attr.format = VK_FORMAT_R32G32_SFLOAT;
+        attr.offset = 12;
+        attrDescs.push_back(attr);
+        attr.location = 2;
+        attr.binding = 1;
+        attr.format = VK_FORMAT_R32G32B32_SFLOAT;
+        attr.offset = 0;
+        attrDescs.push_back(attr);
+        attr.location = 3;
+        attr.binding = 1;
+        attr.format = VK_FORMAT_R32_SFLOAT;
+        attr.offset = 12;
+        attrDescs.push_back(attr);
+        attr.location = 4;
+        attr.binding = 1;
+        attr.format = VK_FORMAT_R32_UINT;
+        attr.offset = 16;
+        attrDescs.push_back(attr);
+        attr.location = 5;
+        attr.binding = 1;
+        attr.format = VK_FORMAT_R32_UINT;
+        attr.offset = 20;
+        attrDescs.push_back(attr);
+    } else if (config.vsPath.find(L"fullscreen") == std::wstring::npos) {
         VkVertexInputBindingDescription mainBind = {};
         mainBind.binding = 0;
         mainBind.stride = config.isSkinned ? sizeof(SkinnedVertex) : sizeof(Vertex);
@@ -1366,10 +1624,9 @@ void RHI_Vulkan::SetPipeline(RHIPipeline *p) {
 }
 
 void RHI_Vulkan::BeginFrame() {
-    // Synchronize CPU with GPU frames
-    vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
-                    UINT64_MAX);
-
+    // The fence for this frame slot was already waited on (and its resources
+    // recycled) at the tail of EndFrame, so streamed uploads recorded during
+    // Update wrote into an already-free upload heap. No wait needed here.
     VkResult res = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
                                          imageAvailableSemaphores[currentFrame],
                                          VK_NULL_HANDLE, &imageIndex);
@@ -1416,12 +1673,32 @@ void RHI_Vulkan::EndFrame() {
 
     vkEndCommandBuffer(cmdBuffers[currentFrame]);
 
-    VkSubmitInfo submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
-    VkPipelineStageFlags waitStages[] = {
-                                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    // Submit streamed-texture uploads on their OWN submit first, signaling a
+    // semaphore. The render submit waits on it, so every copy + layout
+    // transition is globally complete before any draw samples the texture.
+    // (Direct analog of the DX12 copy-queue + fence wait.)
+    bool didUpload = false;
+    if (uploadOpen) {
+        vkEndCommandBuffer(uploadCmds[currentFrame]);
+        VkSubmitInfo us = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        us.commandBufferCount = 1;
+        us.pCommandBuffers = &uploadCmds[currentFrame];
+        us.signalSemaphoreCount = 1;
+        us.pSignalSemaphores = &uploadSemaphores[currentFrame];
+        vkQueueSubmit(graphicsQueue, 1, &us, VK_NULL_HANDLE);
+        uploadOpen = false;
+        didUpload = true;
+    }
 
-    submitInfo.waitSemaphoreCount = 1;
+    VkSubmitInfo submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkSemaphore waitSemaphores[2] = {imageAvailableSemaphores[currentFrame],
+                                     uploadSemaphores[currentFrame]};
+    VkPipelineStageFlags waitStages[2] = {
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT};
+
+    submitInfo.waitSemaphoreCount = didUpload ? 2u : 1u;
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
@@ -1449,8 +1726,26 @@ void RHI_Vulkan::EndFrame() {
         CreateSwapchainResources(m_vsync);
     }
 
-    // Advance double buffering cycle
+    // Advance double buffering cycle, then wait until the frame slot we are
+    // about to reuse is finished so the next Update can safely overwrite its
+    // upload heap and we can recycle its retired slots/resources.
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE,
+                    UINT64_MAX);
+
+    for (uint32_t slot : m_deferredBindlessFree[currentFrame])
+        m_freeBindlessSlots.push_back(slot);
+    m_deferredBindlessFree[currentFrame].clear();
+
+    for (auto &r : m_imageGarbage[currentFrame]) {
+        if (r.view)
+            vkDestroyImageView(device, r.view, nullptr);
+        if (r.image)
+            vmaDestroyImage(allocator, r.image, r.alloc);
+    }
+    m_imageGarbage[currentFrame].clear();
+
+    m_uploadHeaps[currentFrame].cursor = 0;
 }
 
 std::shared_ptr<RHIBuffer> RHI_Vulkan::CreateBuffer(BufferType t, const void *d,
@@ -1541,6 +1836,125 @@ void RHI_Vulkan::UpdateBuffer(RHIBuffer *b, const void *d, size_t s) {
         vmaFlushAllocation(allocator, vk->alloc, offset, s);
         vmaUnmapMemory(allocator, vk->alloc);
     }
+}
+
+std::shared_ptr<RHITexture>
+RHI_Vulkan::CreateTextureFromData(const void* data, size_t dataSize, int width,
+                                  int height, DXGI_FORMAT format,
+                                  int mipLevels) {
+    if (!data || dataSize == 0 || width <= 0 || height <= 0 || mipLevels <= 0)
+        return nullptr;
+
+    auto t = std::make_shared<VKTexture>();
+    t->width = width;
+    t->height = height;
+
+    VkFormat vkFormat = VKFormatFromDXGI(format);
+    VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = vkFormat;
+    imageInfo.extent = {static_cast<uint32_t>(width),
+                        static_cast<uint32_t>(height), 1};
+    imageInfo.mipLevels = static_cast<uint32_t>(mipLevels);
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    if (vmaCreateImage(allocator, &imageInfo, &allocInfo, &t->image, &t->alloc,
+                       nullptr) != VK_SUCCESS) {
+        return nullptr;
+    }
+
+    t->ownsImage = true; // image/view/alloc retired via deferred garbage on destroy
+
+    // Stage into this frame's ring upload buffer (cursor bump, no per-texture
+    // allocation) and record the copy onto the per-frame upload command buffer.
+    UploadAlloc up = AllocUpload(dataSize, 16);
+    memcpy(up.cpu, data, dataSize);
+    vmaFlushAllocation(allocator, m_uploadHeaps[currentFrame].alloc, up.offset,
+                       dataSize);
+
+    std::vector<VkBufferImageCopy> regions;
+    regions.reserve(mipLevels);
+    size_t srcOffset = 0;
+
+    for (int mip = 0; mip < mipLevels; ++mip) {
+        uint32_t mipW =
+            std::max<uint32_t>(1, static_cast<uint32_t>(width) >> mip);
+        uint32_t mipH =
+            std::max<uint32_t>(1, static_cast<uint32_t>(height) >> mip);
+        uint32_t rowBytes = 0;
+        uint32_t rowCount = 0;
+        VKMipLayout(format, mipW, mipH, rowBytes, rowCount);
+        size_t mipSize = static_cast<size_t>(rowBytes) * rowCount;
+        if (srcOffset + mipSize > dataSize)
+            return nullptr;
+
+        VkBufferImageCopy copy = {};
+        copy.bufferOffset = up.offset + srcOffset; // offset within the ring buffer
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.mipLevel = static_cast<uint32_t>(mip);
+        copy.imageSubresource.baseArrayLayer = 0;
+        copy.imageSubresource.layerCount = 1;
+        copy.imageExtent = {mipW, mipH, 1};
+        regions.push_back(copy);
+        srcOffset += mipSize;
+    }
+
+    OpenUploadCmd();
+    VkCommandBuffer c = uploadCmds[currentFrame];
+    {
+        VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.image = t->image;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = static_cast<uint32_t>(mipLevels);
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &barrier);
+
+        vkCmdCopyBufferToImage(c, up.buf, t->image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               static_cast<uint32_t>(regions.size()),
+                               regions.data());
+
+        // This barrier (TRANSFER -> VERTEX/FRAGMENT) also synchronizes the
+        // render commands batched after this upload buffer in the frame submit.
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = t->image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = vkFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = static_cast<uint32_t>(mipLevels);
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &viewInfo, nullptr, &t->view);
+
+    t->imageInfo = {mainSampler, t->view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    RegisterBindlessTexture(t.get());
+    return t;
 }
 
 std::shared_ptr<RHITexture>
@@ -1648,6 +2062,7 @@ RHI_Vulkan::CreateTexture(const std::wstring &path) {
 
     t->imageInfo = {mainSampler, t->view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    RegisterBindlessTexture(t.get());
     return t;
 }
 std::shared_ptr<RHITexture> RHI_Vulkan::CreateUAVTexture3D(int w, int h, int depth, int format) {
@@ -1755,6 +2170,7 @@ RHI_Vulkan::CreateDDSTexture(const std::wstring &path) {
 
     t->imageInfo = {mainSampler, t->view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    RegisterBindlessTexture(t.get());
     return t;
 }
 
@@ -1865,21 +2281,28 @@ void RHI_Vulkan::Resize(int newW, int newH) {
 }
 
 void RHI_Vulkan::SetGlobalUniforms(RHIBuffer *b, const void *d, size_t s) {
-    size_t aligned = (s + minUboAlignment - 1) & ~(minUboAlignment - 1);
     auto vb = static_cast<VKBuffer *>(b);
+    currentUBO = vb;
+    needsDescriptorUpdate = true;
+
+    // s == 0 means "re-bind the global data already uploaded this frame"
+    // (terrain does this, mirroring a DX12 root-CBV re-bind). On Vulkan we must
+    // NOT clobber the offset/size to 0 — that would give the descriptor an empty
+    // range and the shader would read zero view/projection matrices.
+    if (!d || s == 0)
+        return;
+
+    size_t aligned = (s + minUboAlignment - 1) & ~(minUboAlignment - 1);
     UINT64 frameBase = currentFrame * vb->sizePerFrame;
 
-    if (vb->mapped && d) {
+    if (vb->mapped) {
         memcpy(static_cast<uint8_t *>(vb->mapped) + frameBase + cOff, d, s);
         vmaFlushAllocation(allocator, vb->alloc, frameBase + cOff, s);
     }
 
-    currentUBO = vb;
     lastUBOOffset = static_cast<uint32_t>(frameBase + cOff);
-    lastUBOSize =
-        static_cast<uint32_t>(s); // <--- TADY SI ULO��ME SKUTE�NOU VELIKOST!
+    lastUBOSize = static_cast<uint32_t>(s);
     cOff += aligned;
-    needsDescriptorUpdate = true;
 }
 
 void RHI_Vulkan::SetPushConstants(const void *data, size_t size) {

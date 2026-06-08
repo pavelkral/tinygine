@@ -9,22 +9,21 @@ cbuffer GlobalData : register(b0)
     // other padding depending on your GlobalData size
 };
 
-struct InstanceData
-{
-    float3 worldPos;
-    float scale;
-    uint heightMapIndex;
-    uint colorMapIndex;
-};
+#define MAX_BINDLESS_TEXTURES 4096
 
-// Texture unbounded array for Bindless
-Texture2D g_Textures[] : register(t0, space0);
+// Fixed-size bindless table. DX12 binds it from the shader-visible SRV heap;
+// Vulkan maps t0 to binding 3 through the existing compiler shifts.
+Texture2D g_Textures[MAX_BINDLESS_TEXTURES] : register(t0, space0);
 SamplerState g_Sampler : register(s0);
 
 struct VS_IN
 {
     float3 pos : POSITION;
     float2 uv : TEXCOORD0;
+    float3 worldPos : TEXCOORD3;
+    float scale : TEXCOORD4;
+    uint heightMapIndex : TEXCOORD5;
+    uint colorMapIndex : TEXCOORD6;
 };
 
 struct PS_IN
@@ -39,34 +38,47 @@ struct PS_IN
 static const float EARTH_RADIUS = 6371000.0;
 static const float HEIGHT_SCALE = 1603.0;
 
-PS_IN VSMain(VS_IN input, uint instanceID : SV_InstanceID, StructuredBuffer<InstanceData> g_Instances : register(t1, space0))
+PS_IN VSMain(VS_IN input)
 {
     PS_IN output;
-    InstanceData inst = g_Instances[instanceID];
     
-    // Bindless sampling of heightmap
-    float h = g_Textures[NonUniformResourceIndex(inst.heightMapIndex)].SampleLevel(g_Sampler, input.uv, 0).r;
+    // Bindless sampling of heightmap. Clamp the UV half a texel inside the tile
+    // so an edge vertex (uv 0/1) never samples across the sampler's WRAP boundary
+    // (which would pull in the opposite edge and create huge seams/walls).
+    float2 hUV = clamp(input.uv, 0.5 / 256.0, 1.0 - 0.5 / 256.0);
+    float h = g_Textures[NonUniformResourceIndex(input.heightMapIndex)].SampleLevel(g_Sampler, hUV, 0).r;
 
     float3 absPos;
-    absPos.x = inst.worldPos.x + input.pos.x * inst.scale;
     float skirtOffset = 0.0;
+    float2 gridXZ = float2(input.pos.x, input.pos.z);
     if (input.pos.y < -0.01)
-        skirtOffset = input.pos.y * inst.scale * 4.0;
-
-    absPos.y = inst.worldPos.y + (h * HEIGHT_SCALE) + skirtOffset;
-    absPos.z = inst.worldPos.z + input.pos.z * inst.scale;
+    {
+        // Skirt (edge) vertices: drop down enough to cover seam gaps between
+        // tiles (was * 4.0 ~= 5 km walls). 0.5 still covers any realistic seam.
+        skirtOffset = input.pos.y * input.scale * 0.5;
+        // Recess the skirt bottom slightly toward the tile centre so adjacent
+        // tiles' skirts diverge below the shared edge instead of overlapping
+        // exactly -> removes the z-fighting between coincident skirts.
+        gridXZ = lerp(gridXZ, float2(0.5, 0.5), 0.02);
+    }
+    absPos.x = input.worldPos.x + gridXZ.x * input.scale;
+    absPos.y = input.worldPos.y + (h * HEIGHT_SCALE) + skirtOffset;
+    absPos.z = input.worldPos.z + gridXZ.y * input.scale;
 
     float dist = length(absPos.xz - camPos.xz);
     float drop = (dist * dist) / (2.0 * EARTH_RADIUS);
     absPos.y -= drop;
 
-    float3 rPos = absPos - camPos;
-    output.relPos = rPos;
+    // The view matrix is a FULL LookTo (eye = camera), so it already subtracts
+    // the camera position. Do NOT subtract camPos here as well, otherwise the
+    // terrain is offset by camPos and "swims" relative to objects as the camera
+    // moves (objects use absolute world positions + the same view).
+    output.relPos = absPos - camPos; // kept relative for PS world-space (matches old behavior)
 
-    float4 vPos = mul(float4(rPos, 1.0), view);
+    float4 vPos = mul(float4(absPos, 1.0), view);
     output.pos = mul(vPos, projection);
     output.uv = input.uv;
-    output.colorIdx = inst.colorMapIndex;
+    output.colorIdx = input.colorMapIndex;
     
     if (input.pos.y < -0.01)
     {

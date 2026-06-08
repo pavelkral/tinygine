@@ -138,10 +138,12 @@ void TerrainManager::Init(RHI* rhi, const MapConfig& cfg) {
 
     // Create pipelines
     PipelineConfig psoDesc;
-    psoDesc.vsPath = L"shaders/terrain/terrain.vert.hlsl";
-    psoDesc.psPath = L"shaders/terrain/terrain.frag.hlsl";
+    psoDesc.vsPath = L"shaders/rhi/terrain/terrain.vert.hlsl";
+    psoDesc.psPath = L"shaders/rhi/terrain/terrain.frag.hlsl";
     psoDesc.cullMode = CullMode::None;
     psoDesc.useInstancing = true;
+    psoDesc.isTerrain = true;
+    psoDesc.useBindlessTextures = true;
     psoDesc.numRenderTargets = 3; // G-Buffer Color, Normal, Pos
     m_TerrainPSO = m_rhi->CreatePipeline(psoDesc);
 
@@ -255,18 +257,29 @@ void TerrainManager::Shutdown() {
 
 void TerrainManager::ClearQueueOnly() {
     m_qRequestQueue.clear();
+    m_qResultQueue.clear();
     m_setInProgress.clear();
     m_iPendingTasks = 0;
+    m_iLastUploadedCount = 0;
+    m_iLastRequestCount = 0;
+    m_iLastEvictedCount = 0;
 }
 
 void TerrainManager::Update(const std::vector<TileKey>& vecNeededTiles, float fHScale) {
     m_fCurrentHeightScale = fHScale;
+    m_iLastNeededTileCount = (int)vecNeededTiles.size();
+    m_iLastUploadedCount = 0;
+    m_iLastRequestCount = 0;
+    m_iLastEvictedCount = 0;
+
     LoadedTileData result;
     int uploaded = 0;
 
     // Process loaded tiles
-    while (m_qResultQueue.try_pop(result) && uploaded < 10) { // Limit uploads per frame to avoid lag
-        m_iPendingTasks--;
+    while (m_qResultQueue.try_pop(result) && uploaded < m_iMaxUploadsPerFrame) {
+        if (m_iPendingTasks > 0) {
+            m_iPendingTasks--;
+        }
         m_setInProgress.erase(result.m_Key);
 
         if (result.m_bSuccess) {
@@ -276,12 +289,18 @@ void TerrainManager::Update(const std::vector<TileKey>& vecNeededTiles, float fH
         }
         uploaded++;
     }
+    m_iLastUploadedCount = uploaded;
+    m_iTotalUploadedCount += uploaded;
+
+    if (!m_bStreamingEnabled) {
+        return;
+    }
 
     // Request new tiles
     int iRequestsSent = 0;
     for (const auto& k : vecNeededTiles) {
         if (m_mapActiveChunks.find(k) == m_mapActiveChunks.end() && m_setInProgress.find(k) == m_setInProgress.end()) {
-            if (m_iPendingTasks < 150 && iRequestsSent < 10) {
+            if (m_iPendingTasks < m_iMaxPendingTasksLimit && iRequestsSent < m_iMaxRequestsPerFrame) {
                 m_qRequestQueue.push(k);
                 m_setInProgress.insert(k);
                 m_iPendingTasks++;
@@ -289,10 +308,11 @@ void TerrainManager::Update(const std::vector<TileKey>& vecNeededTiles, float fH
             }
         }
     }
+    m_iLastRequestCount = iRequestsSent;
 
     // Garbage collection
-    static int iGC = 0; iGC++;
-    if (iGC % 60 == 0) {
+    m_iGcFrameCounter++;
+    if (m_bAutoUnload && m_iGcIntervalFrames > 0 && m_iGcFrameCounter % m_iGcIntervalFrames == 0) {
         for (auto it = m_mapActiveChunks.begin(); it != m_mapActiveChunks.end(); ) {
             bool bIsNeeded = false;
             for (const auto& n : vecNeededTiles) {
@@ -300,12 +320,225 @@ void TerrainManager::Update(const std::vector<TileKey>& vecNeededTiles, float fH
             }
             if (!bIsNeeded) {
                 it = m_mapActiveChunks.erase(it);
+                m_iLastEvictedCount++;
+                m_iTotalEvictedCount++;
             }
             else {
                 ++it;
             }
         }
     }
+}
+
+static const char* TerrainFormatName(DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R16_UNORM: return "R16_UNORM";
+    case DXGI_FORMAT_R8G8B8A8_UNORM: return "RGBA8";
+    case DXGI_FORMAT_BC1_UNORM: return "BC1";
+    case DXGI_FORMAT_BC3_UNORM: return "BC3";
+    default: return "Unknown";
+    }
+}
+
+bool TerrainManager::DrawDebug(MapConfig* runtimeMapCfg,
+                               int* currentZoom,
+                               bool* autoZoom,
+                               float* heightScale,
+                               int visibleTileX,
+                               int visibleTileY,
+                               float currentGroundHeight,
+                               const Vector3d* cameraPos) {
+    bool reloadRequested = false;
+
+    MapConfig& cfg = runtimeMapCfg ? *runtimeMapCfg : m_MapCfg;
+
+    int validChunks = 0;
+    uint32_t minBindless = UINT32_MAX;
+    uint32_t maxBindless = 0;
+    for (const auto& pair : m_mapActiveChunks) {
+        const auto& chunk = pair.second;
+        if (!chunk || !chunk->m_bValid) continue;
+        validChunks++;
+        if (chunk->m_TexHeight) {
+            minBindless = std::min(minBindless, chunk->m_TexHeight->bindlessIndex);
+            maxBindless = std::max(maxBindless, chunk->m_TexHeight->bindlessIndex);
+        }
+        if (chunk->m_TexColor) {
+            minBindless = std::min(minBindless, chunk->m_TexColor->bindlessIndex);
+            maxBindless = std::max(maxBindless, chunk->m_TexColor->bindlessIndex);
+        }
+    }
+    if (minBindless == UINT32_MAX) minBindless = 0;
+
+    ImGui::Begin("Terrain");
+
+    if (ImGui::BeginTabBar("TerrainTabs")) {
+        if (ImGui::BeginTabItem("Runtime")) {
+            ImGui::Text("Loaded chunks: %d / %d", GetLoadedCount(), MAX_INSTANCES);
+            ImGui::Text("Valid chunks: %d", validChunks);
+            ImGui::Text("Needed tiles: %d", m_iLastNeededTileCount);
+            ImGui::Text("Pending tasks: %d", GetPendingCount());
+            ImGui::Text("Request queue: %zu", m_qRequestQueue.size());
+            ImGui::Text("Result queue: %zu", m_qResultQueue.size());
+            ImGui::Separator();
+            ImGui::Text("Last frame uploads: %d", m_iLastUploadedCount);
+            ImGui::Text("Last frame requests: %d", m_iLastRequestCount);
+            ImGui::Text("Last GC evictions: %d", m_iLastEvictedCount);
+            ImGui::Text("Total uploads: %llu", (unsigned long long)m_iTotalUploadedCount);
+            ImGui::Text("Total evictions: %llu", (unsigned long long)m_iTotalEvictedCount);
+            ImGui::Separator();
+            ImGui::Text("Visible tile: X %d  Y %d", visibleTileX, visibleTileY);
+            ImGui::Text("Ground height: %.2f m", currentGroundHeight);
+            if (cameraPos) {
+                ImGui::Text("Camera: X %.1f  Y %.1f  Z %.1f",
+                            cameraPos->x, cameraPos->y, cameraPos->z);
+            }
+            ImGui::Text("Bindless range: %u - %u", minBindless, maxBindless);
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Settings")) {
+            ImGui::Checkbox("Render Terrain", &m_bRenderEnabled);
+            ImGui::Checkbox("Render Terrain Shadows", &m_bShadowRenderEnabled);
+            ImGui::Checkbox("Streaming Enabled", &m_bStreamingEnabled);
+            ImGui::Checkbox("Auto Unload Far Tiles", &m_bAutoUnload);
+
+            if (autoZoom) {
+                ImGui::Checkbox("Auto Zoom From Camera Height", autoZoom);
+            }
+            if (currentZoom) {
+                ImGui::BeginDisabled(autoZoom && *autoZoom);
+                if (ImGui::SliderInt("Current Zoom", currentZoom, 10, 18)) {
+                    *currentZoom = std::clamp(*currentZoom, 1, 22);
+                    ClearQueueOnly();
+                    m_mapActiveChunks.clear();
+                    reloadRequested = true;
+                }
+                ImGui::EndDisabled();
+            }
+            if (heightScale) {
+                ImGui::SliderFloat("Height Scale", heightScale, 0.0f, 5.0f, "%.2f");
+            }
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Streaming Limits");
+            ImGui::SliderInt("Uploads / Frame", &m_iMaxUploadsPerFrame, 1, 64);
+            ImGui::SliderInt("Requests / Frame", &m_iMaxRequestsPerFrame, 1, 64);
+            ImGui::SliderInt("Max Pending Tasks", &m_iMaxPendingTasksLimit, 1, 512);
+            ImGui::SliderInt("GC Interval Frames", &m_iGcIntervalFrames, 1, 600);
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Map Selection");
+            bool mapChanged = false;
+            mapChanged |= ImGui::DragInt("Ref Zoom", &cfg.RefZoom, 1, 1, 22);
+            mapChanged |= ImGui::DragInt("Start Tile X", &cfg.StartTileXRef, 1);
+            mapChanged |= ImGui::DragInt("Start Tile Y", &cfg.StartTileYRef, 1);
+            mapChanged |= ImGui::DragInt("Radius", &cfg.Radius, 1, 1, 64);
+            mapChanged |= ImGui::DragScalar("Ref Tile Width", ImGuiDataType_Double, &cfg.RefTileWidth, 100.0f, nullptr, nullptr, "%.1f m");
+            mapChanged |= ImGui::DragScalar("Ref Tile Length", ImGuiDataType_Double, &cfg.RefTileLength, 100.0f, nullptr, nullptr, "%.1f m");
+            mapChanged |= ImGui::DragFloat("Min Height", &cfg.MinHeight, 1.0f, -10000.0f, 10000.0f, "%.1f m");
+            mapChanged |= ImGui::DragFloat("Max Height", &cfg.MaxHeight, 1.0f, -10000.0f, 10000.0f, "%.1f m");
+
+            if (mapChanged) {
+                cfg.Radius = std::clamp(cfg.Radius, 1, 128);
+                cfg.RefZoom = std::clamp(cfg.RefZoom, 1, 22);
+                m_MapCfg = cfg;
+                ClearQueueOnly();
+                m_mapActiveChunks.clear();
+                reloadRequested = true;
+            }
+
+            ImGui::Separator();
+            if (ImGui::Button("Clear Queues")) {
+                ClearQueueOnly();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Unload All Chunks")) {
+                ClearQueueOnly();
+                m_mapActiveChunks.clear();
+                reloadRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reload Terrain")) {
+                ClearQueueOnly();
+                m_mapActiveChunks.clear();
+                reloadRequested = true;
+            }
+
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Chunks")) {
+            ImGui::Text("Showing active terrain chunks");
+            if (ImGui::BeginTable("TerrainChunkTable", 11,
+                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_Resizable |
+                                      ImGuiTableFlags_ScrollY,
+                                  ImVec2(0, 360))) {
+                ImGui::TableSetupColumn("X");
+                ImGui::TableSetupColumn("Y");
+                ImGui::TableSetupColumn("Z");
+                ImGui::TableSetupColumn("Origin X");
+                ImGui::TableSetupColumn("Origin Z");
+                ImGui::TableSetupColumn("Height");
+                ImGui::TableSetupColumn("Color");
+                ImGui::TableSetupColumn("Format");
+                ImGui::TableSetupColumn("Mips");
+                ImGui::TableSetupColumn("H Idx");
+                ImGui::TableSetupColumn("C Idx");
+                ImGui::TableHeadersRow();
+
+                int shown = 0;
+                for (const auto& pair : m_mapActiveChunks) {
+                    const auto& chunk = pair.second;
+                    if (!chunk) continue;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("%d", chunk->m_Key.iX);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%d", chunk->m_Key.iY);
+                    ImGui::TableSetColumnIndex(2); ImGui::Text("%d", chunk->m_Key.iZoom);
+                    ImGui::TableSetColumnIndex(3); ImGui::Text("%.1f", chunk->m_WorldOrigin.x);
+                    ImGui::TableSetColumnIndex(4); ImGui::Text("%.1f", chunk->m_WorldOrigin.z);
+                    ImGui::TableSetColumnIndex(5);
+                    if (chunk->m_TexHeight) {
+                        ImGui::Text("%dx%d", chunk->m_TexHeight->width, chunk->m_TexHeight->height);
+                    } else {
+                        ImGui::TextUnformatted("-");
+                    }
+                    ImGui::TableSetColumnIndex(6);
+                    if (chunk->m_TexColor) {
+                        ImGui::Text("%dx%d", chunk->m_TexColor->width, chunk->m_TexColor->height);
+                    } else {
+                        ImGui::TextUnformatted("-");
+                    }
+                    ImGui::TableSetColumnIndex(7);
+                    ImGui::TextUnformatted(TerrainFormatName(chunk->m_ColorFormat));
+                    ImGui::TableSetColumnIndex(8);
+                    ImGui::Text("%d", chunk->m_ColorMipLevels);
+                    ImGui::TableSetColumnIndex(9);
+                    ImGui::Text("%u", chunk->m_TexHeight ? chunk->m_TexHeight->bindlessIndex : 0);
+                    ImGui::TableSetColumnIndex(10);
+                    ImGui::Text("%u", chunk->m_TexColor ? chunk->m_TexColor->bindlessIndex : 0);
+
+                    shown++;
+                    if (shown >= 512) break;
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::Separator();
+            ImGui::Text("Supported terrain upload formats: %s, %s, %s, %s",
+                        TerrainFormatName(DXGI_FORMAT_R16_UNORM),
+                        TerrainFormatName(DXGI_FORMAT_R8G8B8A8_UNORM),
+                        TerrainFormatName(DXGI_FORMAT_BC1_UNORM),
+                        TerrainFormatName(DXGI_FORMAT_BC3_UNORM));
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+    }
+
+    ImGui::End();
+    return reloadRequested;
 }
 
 float TerrainManager::GetGroundHeight(Vector3d worldPos, Vector3d cameraPos, float fHeightScale, int currentZoom) {
@@ -346,6 +579,7 @@ float TerrainManager::GetGroundHeight(Vector3d worldPos, Vector3d cameraPos, flo
 }
 
 void TerrainManager::Render(RHIBuffer* globalUniforms) {
+    if (!m_bRenderEnabled) return;
     if (m_mapActiveChunks.empty()) return;
 
     std::vector<TerrainInstanceGPU> instances;
@@ -378,6 +612,7 @@ void TerrainManager::Render(RHIBuffer* globalUniforms) {
 }
 
 void TerrainManager::RenderShadows(RHIBuffer* globalUniforms) {
+    if (!m_bRenderEnabled || !m_bShadowRenderEnabled) return;
     if (m_mapActiveChunks.empty()) return;
 
     // Logic is the same, but using the Shadow PSO

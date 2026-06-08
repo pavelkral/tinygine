@@ -10,6 +10,9 @@ public:
 
     std::shared_ptr<RHITexture> m_TexHeight;
     std::shared_ptr<RHITexture> m_TexColor;
+    DXGI_FORMAT m_HeightFormat = DXGI_FORMAT_R16_UNORM;
+    DXGI_FORMAT m_ColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    int m_ColorMipLevels = 1;
 
     std::vector<unsigned short> m_CpuHeightData;
     int m_CpuHeightW = 0;

@@ -44,6 +44,154 @@ void RHI_DX12::TransitionBuffer(ID3D12Resource *res,
     cmd->ResourceBarrier(1, &rb);
 }
 
+static bool DX12IsBlockCompressed(DXGI_FORMAT format) {
+    return format == DXGI_FORMAT_BC1_UNORM || format == DXGI_FORMAT_BC1_UNORM_SRGB ||
+           format == DXGI_FORMAT_BC2_UNORM || format == DXGI_FORMAT_BC2_UNORM_SRGB ||
+           format == DXGI_FORMAT_BC3_UNORM || format == DXGI_FORMAT_BC3_UNORM_SRGB ||
+           format == DXGI_FORMAT_BC4_UNORM || format == DXGI_FORMAT_BC4_SNORM ||
+           format == DXGI_FORMAT_BC5_UNORM || format == DXGI_FORMAT_BC5_SNORM ||
+           format == DXGI_FORMAT_BC7_UNORM || format == DXGI_FORMAT_BC7_UNORM_SRGB;
+}
+
+static UINT DX12BytesPerBlock(DXGI_FORMAT format) {
+    switch (format) {
+    case DXGI_FORMAT_R16_UNORM:
+        return 2;
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        return 4;
+    case DXGI_FORMAT_BC1_UNORM:
+    case DXGI_FORMAT_BC1_UNORM_SRGB:
+    case DXGI_FORMAT_BC4_UNORM:
+    case DXGI_FORMAT_BC4_SNORM:
+        return 8;
+    case DXGI_FORMAT_BC2_UNORM:
+    case DXGI_FORMAT_BC2_UNORM_SRGB:
+    case DXGI_FORMAT_BC3_UNORM:
+    case DXGI_FORMAT_BC3_UNORM_SRGB:
+    case DXGI_FORMAT_BC5_UNORM:
+    case DXGI_FORMAT_BC5_SNORM:
+    case DXGI_FORMAT_BC7_UNORM:
+    case DXGI_FORMAT_BC7_UNORM_SRGB:
+        return 16;
+    default:
+        return 4;
+    }
+}
+
+static void DX12MipLayout(DXGI_FORMAT format, UINT width, UINT height,
+                          UINT &rowBytes, UINT &rowCount) {
+    if (DX12IsBlockCompressed(format)) {
+        rowBytes = std::max<UINT>(1, (width + 3) / 4) * DX12BytesPerBlock(format);
+        rowCount = std::max<UINT>(1, (height + 3) / 4);
+    } else {
+        rowBytes = width * DX12BytesPerBlock(format);
+        rowCount = height;
+    }
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE RHI_DX12::AllocateSrvDescriptor(DX12Texture *tex) {
+    // Reuse a slot freed by a previously destroyed texture before growing the
+    // monotonic offset. Without this the bindless index pool leaks every time a
+    // streamed terrain chunk is evicted, eventually exceeding the 4096-entry
+    // bindless table and producing out-of-range samples (garbage geometry).
+    UINT descriptorIndex;
+    if (!m_freeSrvSlots.empty()) {
+        descriptorIndex = m_freeSrvSlots.back();
+        m_freeSrvSlots.pop_back();
+    } else {
+        descriptorIndex = sOff++;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = srvH->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += descriptorIndex * sInc;
+
+    if (tex) {
+        tex->srvHandle = srvH->GetGPUDescriptorHandleForHeapStart();
+        tex->srvHandle.ptr += descriptorIndex * sInc;
+        tex->bindlessIndex = descriptorIndex;
+        tex->ownerRHI = this;
+        tex->hasBindlessSlot = true;
+    }
+
+    return cpuHandle;
+}
+
+void LinearUploadHeap::Init(ID3D12Device *dev, UINT64 size) {
+    capacity = size;
+    cursor = 0;
+    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_UPLOAD};
+    D3D12_RESOURCE_DESC rd = {D3D12_RESOURCE_DIMENSION_BUFFER,
+                              0,
+                              size,
+                              1,
+                              1,
+                              1,
+                              DXGI_FORMAT_UNKNOWN,
+                              {1, 0},
+                              D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                              D3D12_RESOURCE_FLAG_NONE};
+    dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                 IID_PPV_ARGS(&buf));
+    buf->Map(0, nullptr, reinterpret_cast<void **>(&cpu));
+}
+
+LinearUploadHeap::Alloc LinearUploadHeap::Allocate(UINT64 size, UINT64 align) {
+    UINT64 aligned = (cursor + (align - 1)) & ~(align - 1);
+    // The heap is sized for a whole frame's uploads; wrap only as a last-resort
+    // safety so we never read/write past the buffer.
+    if (aligned + size > capacity)
+        aligned = 0;
+    Alloc a;
+    a.res = buf.Get();
+    a.cpu = cpu + aligned;
+    a.offset = aligned;
+    cursor = aligned + size;
+    return a;
+}
+
+void RHI_DX12::FreeSrvDescriptor(UINT index) {
+    // Defer recycling until this frame's slot cycles back (GPU done with it).
+    m_deferredSrvFree[fIdx].push_back(index);
+}
+
+void RHI_DX12::DeferResourceRelease(ComPtr<ID3D12Resource> res) {
+    if (res)
+        m_resourceGarbage[fIdx].push_back(std::move(res));
+}
+
+void RHI_DX12::OpenCopyList() {
+    if (copyOpen)
+        return;
+    copyAlc[fIdx]->Reset();
+    copyCmd->Reset(copyAlc[fIdx].Get(), nullptr);
+    copyOpen = true;
+}
+
+void RHI_DX12::FlushCopyList() {
+    if (!copyOpen)
+        return;
+    copyCmd->Close();
+    ID3D12CommandList *lists[] = {copyCmd.Get()};
+    copyQueue->ExecuteCommandLists(1, lists);
+
+    copyFenceVal++;
+    copyQueue->Signal(copyFence.Get(), copyFenceVal);
+    // Main (graphics) queue must wait for the uploads before drawing with them.
+    queue->Wait(copyFence.Get(), copyFenceVal);
+    copyOpen = false;
+}
+
+DX12Texture::~DX12Texture() {
+    if (hasBindlessSlot && ownerRHI) {
+        ownerRHI->FreeSrvDescriptor(bindlessIndex);
+        // Keep the resource alive until the frame slot recycles (it may still
+        // be referenced by an in-flight command list).
+        if (res)
+            ownerRHI->DeferResourceRelease(std::move(res));
+    }
+}
 bool RHI_DX12::Init(HWND hWnd, int width, int height) {
     w = width;
     h = height;
@@ -200,6 +348,21 @@ bool RHI_DX12::Init(HWND hWnd, int width, int height) {
     dev->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                              IID_PPV_ARGS(&computeRS));
 
+    // 11. Async upload infrastructure (dedicated COPY queue + ring upload heaps)
+    D3D12_COMMAND_QUEUE_DESC cqd = {D3D12_COMMAND_LIST_TYPE_COPY};
+    dev->CreateCommandQueue(&cqd, IID_PPV_ARGS(&copyQueue));
+    for (int i = 0; i < FrameCount; i++) {
+        dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY,
+                                    IID_PPV_ARGS(&copyAlc[i]));
+        // 128 MB per frame is far more than a frame's worth of streamed tiles.
+        m_uploadHeap[i].Init(dev.Get(), 128ull * 1024 * 1024);
+    }
+    dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, copyAlc[0].Get(),
+                           nullptr, IID_PPV_ARGS(&copyCmd));
+    copyCmd->Close();
+    dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&copyFence));
+    copyEvt = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
     return true;
 }
 
@@ -325,11 +488,10 @@ void RHI_DX12::ImGuiCleanup() {
 }
 
 void RHI_DX12::BeginFrame() {
-    // Wait for the previous frame's memory to be released
-    if (fence->GetCompletedValue() < fenceValues[fIdx]) {
-        fence->SetEventOnCompletion(fenceValues[fIdx], fEvt);
-        WaitForSingleObject(fEvt, INFINITE);
-    }
+    // Submit any streamed-texture copies recorded during this frame's update,
+    // and make the graphics queue wait on them before drawing. The frame slot
+    // we are about to use was already waited on + recycled in EndFrame.
+    FlushCopyList();
 
     alc[fIdx]->Reset();
     cmd->Reset(alc[fIdx].Get(), nullptr);
@@ -365,7 +527,23 @@ void RHI_DX12::EndFrame() {
     fenceValues[fIdx] = f;
     fVal = f;
 
+    // Advance to the next frame and wait until its previous work is finished,
+    // so the resources we are about to reuse (upload heap, descriptor slots,
+    // retired GPU resources) are guaranteed free. This wait used to live in
+    // BeginFrame; moving it here lets the next frame's Update safely write into
+    // a freshly reset upload heap.
     fIdx = swap->GetCurrentBackBufferIndex();
+    if (fence->GetCompletedValue() < fenceValues[fIdx]) {
+        fence->SetEventOnCompletion(fenceValues[fIdx], fEvt);
+        WaitForSingleObject(fEvt, INFINITE);
+    }
+
+    // Recycle everything retired FrameCount frames ago.
+    for (UINT idx : m_deferredSrvFree[fIdx])
+        m_freeSrvSlots.push_back(idx);
+    m_deferredSrvFree[fIdx].clear();
+    m_resourceGarbage[fIdx].clear();
+    m_uploadHeap[fIdx].Reset();
 }
 
 RHITexture *RHI_DX12::GetBackBuffer() { return m_backBuffers[fIdx].get(); }
@@ -579,7 +757,7 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
 
     // Each resource must start in the COMMON state in Vulkan and DX12
     if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                            D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                             IID_PPV_ARGS(&t->res)))) {
         return nullptr;
     }
@@ -651,7 +829,8 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
     rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     rb.Transition.pResource = t->res.Get();
     rb.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     tempCmd->ResourceBarrier(1, &rb);
     tempCmd->Close();
@@ -661,12 +840,9 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
     Sync(); // Wait for the copy to complete
 
     // Register the texture in the SRV heap
-    t->currentState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    D3D12_CPU_DESCRIPTOR_HANDLE h = srvH->GetCPUDescriptorHandleForHeapStart();
-    h.ptr += sOff * sInc;
-    t->srvHandle = srvH->GetGPUDescriptorHandleForHeapStart();
-    t->srvHandle.ptr += sOff * sInc;
-    sOff++;
+    t->currentState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    D3D12_CPU_DESCRIPTOR_HANDLE h = AllocateSrvDescriptor(t.get());
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvd = mt::make_d3d12_srv_desc(tex.desc());
     dev->CreateShaderResourceView(t->res.Get(), &srvd, h);
@@ -674,6 +850,100 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
     return t;
 }
 
+std::shared_ptr<RHITexture> RHI_DX12::CreateTextureFromData(const void *data,
+                                                            size_t dataSize,
+                                                            int width,
+                                                            int height,
+                                                            DXGI_FORMAT format,
+                                                            int mipLevels) {
+    if (!data || dataSize == 0 || width <= 0 || height <= 0 || mipLevels <= 0)
+        return nullptr;
+
+    auto t = std::make_shared<DX12Texture>();
+    t->width = width;
+    t->height = height;
+
+    D3D12_RESOURCE_DESC td = {};
+    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    td.Width = static_cast<UINT64>(width);
+    td.Height = static_cast<UINT>(height);
+    td.DepthOrArraySize = 1;
+    td.MipLevels = static_cast<UINT16>(mipLevels);
+    td.Format = format;
+    td.SampleDesc.Count = 1;
+    td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    td.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    // Create the destination in COMMON. The copy happens on the COPY queue and
+    // the texture is then read via the bindless table on the graphics queue,
+    // where common-state promotion handles the SRV read automatically. No
+    // explicit barrier and (crucially) NO per-texture GPU flush.
+    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
+    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
+                                            D3D12_RESOURCE_STATE_COMMON,
+                                            nullptr, IID_PPV_ARGS(&t->res)))) {
+        return nullptr;
+    }
+    t->currentState = D3D12_RESOURCE_STATE_COMMON;
+
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(mipLevels);
+    std::vector<UINT> rows(mipLevels);
+    std::vector<UINT64> rowSizes(mipLevels);
+    UINT64 uploadSize = 0;
+    dev->GetCopyableFootprints(&td, 0, mipLevels, 0, layouts.data(),
+                               rows.data(), rowSizes.data(), &uploadSize);
+    if (uploadSize == 0)
+        return nullptr;
+
+    // Stage the pixels in this frame's ring upload heap (cursor bump, no alloc)
+    // and record the copy onto the shared per-frame copy command list.
+    OpenCopyList();
+    LinearUploadHeap::Alloc up =
+        m_uploadHeap[fIdx].Allocate(uploadSize, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+
+    const uint8_t *srcBase = static_cast<const uint8_t *>(data);
+    size_t srcOffset = 0;
+    for (int mip = 0; mip < mipLevels; ++mip) {
+        UINT mipW = std::max<UINT>(1, static_cast<UINT>(width) >> mip);
+        UINT mipH = std::max<UINT>(1, static_cast<UINT>(height) >> mip);
+        UINT srcRowBytes = 0;
+        UINT srcRows = 0;
+        DX12MipLayout(format, mipW, mipH, srcRowBytes, srcRows);
+
+        if (srcOffset + static_cast<size_t>(srcRowBytes) * srcRows > dataSize)
+            return nullptr;
+
+        uint8_t *dst = up.cpu + layouts[mip].Offset;
+        for (UINT y = 0; y < srcRows; ++y) {
+            memcpy(dst + y * layouts[mip].Footprint.RowPitch,
+                   srcBase + srcOffset + y * srcRowBytes, srcRowBytes);
+        }
+        srcOffset += static_cast<size_t>(srcRowBytes) * srcRows;
+    }
+
+    for (int mip = 0; mip < mipLevels; ++mip) {
+        D3D12_TEXTURE_COPY_LOCATION dst = {
+            t->res.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            static_cast<UINT>(mip)};
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp = layouts[mip];
+        fp.Offset += up.offset; // offset within the shared ring buffer
+        D3D12_TEXTURE_COPY_LOCATION src = {
+            up.res, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, fp};
+        copyCmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+
+    // The SRV descriptor write is CPU-side and safe immediately; the data it
+    // points at is guaranteed present before any draw (graphics waits on copy).
+    D3D12_CPU_DESCRIPTOR_HANDLE srv = AllocateSrvDescriptor(t.get());
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = static_cast<UINT>(mipLevels);
+    dev->CreateShaderResourceView(t->res.Get(), &srvDesc, srv);
+
+    return t;
+}
 std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
     auto t = std::make_shared<DX12Texture>();
     int tw, th, tc;
@@ -702,7 +972,7 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
     D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
 
     if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-                                            D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                                             IID_PPV_ARGS(&t->res)))) {
         return nullptr;
     }
@@ -765,7 +1035,8 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
     rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     rb.Transition.pResource = t->res.Get();
     rb.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    rb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     tempCmd->ResourceBarrier(1, &rb);
     tempCmd->Close();
 
@@ -773,12 +1044,9 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
     queue->ExecuteCommandLists(1, l);
     Sync();
 
-    t->currentState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    D3D12_CPU_DESCRIPTOR_HANDLE h = srvH->GetCPUDescriptorHandleForHeapStart();
-    h.ptr += sOff * sInc;
-    t->srvHandle = srvH->GetGPUDescriptorHandleForHeapStart();
-    t->srvHandle.ptr += sOff * sInc;
-    sOff++;
+    t->currentState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    D3D12_CPU_DESCRIPTOR_HANDLE h = AllocateSrvDescriptor(t.get());
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd = {
                                           DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_SRV_DIMENSION_TEXTURE2D,
@@ -825,7 +1093,7 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                   D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
 
         if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                D3D12_RESOURCE_STATE_COMMON,
+                                                D3D12_RESOURCE_STATE_COPY_DEST,
                                                 nullptr, IID_PPV_ARGS(&b->res)))) {
             return nullptr;
         }
@@ -937,7 +1205,7 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                   D3D12_RESOURCE_FLAG_NONE};
 
         if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                D3D12_RESOURCE_STATE_COMMON,
+                                                D3D12_RESOURCE_STATE_COPY_DEST,
                                                 nullptr, IID_PPV_ARGS(&b->res)))) {
             return nullptr;
         }
@@ -1040,7 +1308,7 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
         if (type == BufferType::Vertex)
             b->vbv = {b->res->GetGPUVirtualAddress(), (UINT)size, actualStride};
         if (type == BufferType::Instance)
-            b->vbv = {b->res->GetGPUVirtualAddress(), (UINT)size, sizeof(ObjectData)};
+            b->vbv = {b->res->GetGPUVirtualAddress(), (UINT)size, actualStride};
         if (type == BufferType::Index)
             b->ibv = {b->res->GetGPUVirtualAddress(), (UINT)size,
                       DXGI_FORMAT_R32_UINT};
@@ -1106,15 +1374,16 @@ void RHI_DX12::SetPushConstants(const void *data, size_t size) {
 
 std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &config) {
     auto p = std::make_shared<DX12Pipeline>();
+    p->usesBindlessTextures = config.useBindlessTextures;
 
-    // 1. Kompilace Vertex Shaderu pøes moderní DXC
+    // 1. Kompilace Vertex Shaderu pï¿½es modernï¿½ DXC
     auto vsBlob = ShaderCompiler::CompileDX12(config.vsPath, "VSMain", "vs_6_0");
     if (!vsBlob) {
-        // Pokud selže, vracíme p. (MessageBox s chybou už vyskoèil uvnitø CompileDX12)
+        // Pokud selï¿½e, vracï¿½me p. (MessageBox s chybou uï¿½ vyskoï¿½il uvnitï¿½ CompileDX12)
         return p;
     }
 
-    // 2. Kompilace Pixel Shaderu (pokud je zadán)
+    // 2. Kompilace Pixel Shaderu (pokud je zadï¿½n)
     ComPtr<IDxcBlob> psBlob = nullptr;
     if (!config.psPath.empty()) {
         psBlob = ShaderCompiler::CompileDX12(config.psPath, "PSMain", "ps_6_0");
@@ -1123,12 +1392,10 @@ std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &conf
         }
     }
     // Create Root Signature (Maps shaders to VRAM)
-    D3D12_DESCRIPTOR_RANGE ranges[8];
-    for (int i = 0; i < 8; i++)
-        ranges[i] = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, (UINT)i};
-
+    D3D12_DESCRIPTOR_RANGE ranges[8] = {};
+    D3D12_DESCRIPTOR_RANGE bindlessRange = {};
     D3D12_ROOT_PARAMETER rp[11] = {};
-    UINT rootParamCount = 11;
+    UINT rootParamCount = config.useBindlessTextures ? 3 : 11;
 
     rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rp[0].Descriptor = {0, 0}; // Global Data (b0)
@@ -1141,19 +1408,36 @@ std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &conf
         rp[1].Constants = {1, 0, sizeof(ObjectData) / 4}; // Instancing
     }
 
-    for (int i = 2; i <= 9; i++) {
-        rp[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        rp[i].DescriptorTable = {1, &ranges[i - 2]};
-        rp[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    }
+    if (config.useBindlessTextures) {
+        bindlessRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        bindlessRange.NumDescriptors = RHI_BINDLESS_TEXTURE_CAPACITY;
+        bindlessRange.BaseShaderRegister = 0;
+        bindlessRange.RegisterSpace = 0;
+        bindlessRange.OffsetInDescriptorsFromTableStart = 0;
 
-    rp[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    rp[10].Descriptor = {2, 0}; // Bones (b2)
+        rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[2].DescriptorTable = {1, &bindlessRange};
+        rp[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    } else {
+        for (int i = 0; i < 8; i++)
+            ranges[i] = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, (UINT)i};
+
+        for (int i = 2; i <= 9; i++) {
+            rp[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            rp[i].DescriptorTable = {1, &ranges[i - 2]};
+            rp[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        }
+
+        rp[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        rp[10].Descriptor = {2, 0}; // Bones (b2)
+    }
 
     D3D12_STATIC_SAMPLER_DESC smp[2] = {};
     smp[0].Filter = D3D12_FILTER_ANISOTROPIC;
     smp[0].MaxAnisotropy = 16;
     smp[0].ShaderRegister = 0;
+    // WRAP: needed by tiled model textures (e.g. the floor). The terrain avoids
+    // the wrap at tile edges by clamping its UV inside the shader instead.
     smp[0].AddressU = smp[0].AddressV = smp[0].AddressW =
         D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     smp[0].MaxLOD = D3D12_FLOAT32_MAX;
@@ -1175,7 +1459,20 @@ std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &conf
 
     // Set up Vertex Input Layout
     std::vector<D3D12_INPUT_ELEMENT_DESC> ied;
-    if (config.vsPath.find(L"fullscreen") == std::wstring::npos) {
+    if (config.isTerrain) {
+        ied.push_back({"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+                       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0});
+        ied.push_back({"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12,
+                       D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0});
+        ied.push_back({"TEXCOORD", 3, DXGI_FORMAT_R32G32B32_FLOAT, 1, 0,
+                       D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1});
+        ied.push_back({"TEXCOORD", 4, DXGI_FORMAT_R32_FLOAT, 1, 12,
+                       D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1});
+        ied.push_back({"TEXCOORD", 5, DXGI_FORMAT_R32_UINT, 1, 16,
+                       D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1});
+        ied.push_back({"TEXCOORD", 6, DXGI_FORMAT_R32_UINT, 1, 20,
+                       D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1});
+    } else if (config.vsPath.find(L"fullscreen") == std::wstring::npos) {
         ied.push_back({"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
                        D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0});
         ied.push_back({"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
@@ -1249,7 +1546,7 @@ std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &conf
         rtBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
     }
     else if (config.enableBlend) {
-        // --- NOVÉ (Pro Cloud Upscale) ---
+        // --- NOVï¿½ (Pro Cloud Upscale) ---
         rtBlend.BlendEnable = TRUE;
         rtBlend.SrcBlend = D3D12_BLEND_ONE;
         rtBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
@@ -1308,6 +1605,9 @@ void RHI_DX12::SetPipeline(RHIPipeline *p) {
         cmd->SetPipelineState(dx->pso.Get());
         lastPSO = dx->pso.Get();
     }
+    if (dx->usesBindlessTextures) {
+        cmd->SetGraphicsRootDescriptorTable(2, srvH->GetGPUDescriptorHandleForHeapStart());
+    }
     cmd->IASetPrimitiveTopology(dx->top);
 }
 
@@ -1339,6 +1639,10 @@ void RHI_DX12::DrawIndexedInstanced(RHIBuffer *vb, RHIBuffer *ib,
     auto inst = (DX12Buffer *)instB;
 
     v->vbv.StrideInBytes = v->stride > 0 ? v->stride : sizeof(Vertex);
+    // Keep the instance buffer view stride in sync with the buffer's real stride
+    // (per-instance struct size), otherwise the input layout reads garbage.
+    if (inst->stride > 0)
+        inst->vbv.StrideInBytes = inst->stride;
 
     D3D12_VERTEX_BUFFER_VIEW views[2] = {v->vbv, inst->vbv};
     cmd->IASetVertexBuffers(0, 2, views);
@@ -1350,9 +1654,9 @@ void RHI_DX12::DrawIndexedInstanced(RHIBuffer *vb, RHIBuffer *ib,
 std::shared_ptr<RHIPipeline> RHI_DX12::CreateComputePipeline(const std::wstring& csPath) {
     auto p = std::make_shared<DX12Pipeline>();
 
-    // Využití naší nové tøídy s moderním DXC kompilátorem
+    // Vyuï¿½itï¿½ naï¿½ï¿½ novï¿½ tï¿½ï¿½dy s modernï¿½m DXC kompilï¿½torem
     auto csBlob = ShaderCompiler::CompileDX12(csPath, "CSMain", "cs_6_0");
-    if (!csBlob) return nullptr; // Pokud kompilace selže, nepokraèujeme!
+    if (!csBlob) return nullptr; // Pokud kompilace selï¿½e, nepokraï¿½ujeme!
 
     p->rs = computeRS;
     D3D12_COMPUTE_PIPELINE_STATE_DESC cpsd = {};
@@ -1473,7 +1777,7 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture3D(int w_in, int h_in, int
     DXGI_FORMAT fmt = (format == 1) ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
 
     D3D12_RESOURCE_DESC d = {};
-    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D
+    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D; // MUSï¿½ Bï¿½T 3D
     d.Width = w_in;
     d.Height = h_in;
     d.DepthOrArraySize = depth_in; // U 3D textury je Depth zde
@@ -1497,7 +1801,7 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture3D(int w_in, int h_in, int
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC ud = {};
     ud.Format = fmt;
-    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D
+    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D; // MUSï¿½ Bï¿½T 3D
     ud.Texture3D.MipSlice = 0;
     ud.Texture3D.FirstWSlice = 0;
     ud.Texture3D.WSize = depth_in;
@@ -1511,7 +1815,7 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture3D(int w_in, int h_in, int
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
     sd.Format = fmt;
-    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D; // MUSÍ BÝT 3D
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D; // MUSï¿½ Bï¿½T 3D
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     sd.Texture3D.MipLevels = 1;
     dev->CreateShaderResourceView(t->res.Get(), &sd, cpuH);

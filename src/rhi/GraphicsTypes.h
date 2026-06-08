@@ -32,4 +32,6 @@ struct PipelineConfig {
     bool isAdditive = false;
     int numRenderTargets = 1; //  MRT
     bool enableBlend = false;
+    bool isTerrain = false;
+    bool useBindlessTextures = false;
 };

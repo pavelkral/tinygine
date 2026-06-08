@@ -7,7 +7,7 @@
 template<typename T>
 class SafeQueue {
     std::queue<T> m_qQueue;
-    std::mutex    m_mutex;
+    mutable std::mutex m_mutex;
     std::condition_variable m_cv;
     bool m_bShutdown = false;
 
@@ -43,6 +43,11 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         std::queue<T> empty;
         std::swap(m_qQueue, empty);
+    }
+
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_qQueue.size();
     }
 
     void signal_exit() {

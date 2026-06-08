@@ -29,6 +29,23 @@ private:
     std::thread       m_ThreadWorker;
     std::atomic<int>  m_iPendingTasks{ 0 };
     float m_fCurrentHeightScale = 1.0f;
+    int m_iGcFrameCounter = 0;
+
+    bool m_bRenderEnabled = true;
+    bool m_bShadowRenderEnabled = true;
+    bool m_bStreamingEnabled = true;
+    bool m_bAutoUnload = true;
+    int m_iMaxUploadsPerFrame = 10;
+    int m_iMaxRequestsPerFrame = 10;
+    int m_iMaxPendingTasksLimit = 150;
+    int m_iGcIntervalFrames = 60;
+
+    int m_iLastNeededTileCount = 0;
+    int m_iLastUploadedCount = 0;
+    int m_iLastRequestCount = 0;
+    int m_iLastEvictedCount = 0;
+    uint64_t m_iTotalUploadedCount = 0;
+    uint64_t m_iTotalEvictedCount = 0;
 
     void WorkerLoop();
     void InitGrid();
@@ -49,9 +66,20 @@ public:
 
     void Render(RHIBuffer* globalUniforms);
     void RenderShadows(RHIBuffer* globalUniforms);
+    bool DrawDebug(MapConfig* runtimeMapCfg = nullptr,
+                   int* currentZoom = nullptr,
+                   bool* autoZoom = nullptr,
+                   float* heightScale = nullptr,
+                   int visibleTileX = 0,
+                   int visibleTileY = 0,
+                   float currentGroundHeight = 0.0f,
+                   const Vector3d* cameraPos = nullptr);
 
     float GetGroundHeight(Vector3d worldPos, Vector3d cameraPos, float fHeightScale, int currentZoom);
 
     int GetLoadedCount() const { return (int)m_mapActiveChunks.size(); }
     int GetPendingCount() const { return m_iPendingTasks.load(); }
+    bool IsRenderEnabled() const { return m_bRenderEnabled; }
+    bool IsShadowRenderEnabled() const { return m_bShadowRenderEnabled; }
+    bool IsStreamingEnabled() const { return m_bStreamingEnabled; }
 };
