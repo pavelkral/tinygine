@@ -5,8 +5,6 @@
 #include "core/Types.h"
 #include "rhi/GraphicsTypes.h"
 #include "rhi/RHI.h"
-#include "rhi/backend_types/DX11Types.h"
-#include "rhi/RHI_DX11.h"
 #include "rhi/backend_types/DX12Types.h"
 #include "rhi/RHI_DX12.h"
 #include "rhi/backend_types/VulkanTypes.h"

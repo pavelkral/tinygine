@@ -8,7 +8,6 @@ add_compile_definitions(UNICODE _UNICODE)
 # FIX OUTPUT DIRECTORIES
 # -----------------------------------------------------------------------------
 
-
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -146,6 +145,7 @@ file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
 file(GLOB_RECURSE ENGINE_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
 )
+
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
