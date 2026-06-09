@@ -2,11 +2,15 @@
 
 #include "pch/Pch.h"
 #include "rhi/RHI.h"
+#include "D3D12MemAlloc.h" // D3D12MA::Allocation backing every GPU resource
 
 class RHI_DX12; // fwd decl for bindless slot recycling
 
 struct DX12Buffer : public RHIBuffer {
     ComPtr<ID3D12Resource> res;
+    // D3D12MA sub-allocation that owns the memory behind `res`. Must outlive the
+    // resource (and be released together with it via deferred destruction).
+    ComPtr<D3D12MA::Allocation> alloc;
     D3D12_VERTEX_BUFFER_VIEW vbv;
     D3D12_INDEX_BUFFER_VIEW ibv;
     UINT8* map = nullptr;
@@ -17,6 +21,8 @@ struct DX12Buffer : public RHIBuffer {
 
 struct DX12Texture : public RHITexture {
     ComPtr<ID3D12Resource> res;
+    // D3D12MA sub-allocation that owns the memory behind `res` (see DX12Buffer).
+    ComPtr<D3D12MA::Allocation> alloc;
     D3D12_GPU_DESCRIPTOR_HANDLE srvHandle = {};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = {};
     D3D12_GPU_DESCRIPTOR_HANDLE uavHandle = {};

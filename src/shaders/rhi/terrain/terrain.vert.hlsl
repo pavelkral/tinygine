@@ -15,6 +15,9 @@ cbuffer GlobalData : register(b0)
 // Vulkan maps t0 to binding 3 through the existing compiler shifts.
 Texture2D g_Textures[MAX_BINDLESS_TEXTURES] : register(t0, space0);
 SamplerState g_Sampler : register(s0);
+// Dedicated terrain sampler: CLAMP addressing so an edge vertex (uv 0/1) never
+// samples across a wrap boundary into the opposite tile edge.
+SamplerState g_SamplerClamp : register(s2);
 
 struct VS_IN
 {
@@ -42,24 +45,22 @@ PS_IN VSMain(VS_IN input)
 {
     PS_IN output;
     
-    // Bindless sampling of heightmap. Clamp the UV half a texel inside the tile
-    // so an edge vertex (uv 0/1) never samples across the sampler's WRAP boundary
-    // (which would pull in the opposite edge and create huge seams/walls).
-    float2 hUV = clamp(input.uv, 0.5 / 256.0, 1.0 - 0.5 / 256.0);
-    float h = g_Textures[NonUniformResourceIndex(input.heightMapIndex)].SampleLevel(g_Sampler, hUV, 0).r;
+    // Bindless sampling of heightmap with the CLAMP terrain sampler, so the raw
+    // 0..1 UV is safe at edges (no wrap to the opposite side, no hardcoded texel
+    // size). Adjacent-tile edge matching is handled by CPU-side edge stitching.
+    float h = g_Textures[NonUniformResourceIndex(input.heightMapIndex)].SampleLevel(g_SamplerClamp, input.uv, 0).r;
 
     float3 absPos;
     float skirtOffset = 0.0;
     float2 gridXZ = float2(input.pos.x, input.pos.z);
     if (input.pos.y < -0.01)
     {
-        // Skirt (edge) vertices: drop down enough to cover seam gaps between
-        // tiles (was * 4.0 ~= 5 km walls). 0.5 still covers any realistic seam.
+        // Skirt (edge) vertices: drop straight down to cover seam gaps between
+        // tiles. No inward inset anymore - skirts are emitted on only two edges
+        // per tile (+X / +Z), so each shared seam is covered by exactly ONE
+        // skirt. There are no coincident overlapping skirts to z-fight, and CPU
+        // edge stitching keeps adjacent heights equal so the seam stays hidden.
         skirtOffset = input.pos.y * input.scale * 0.5;
-        // Recess the skirt bottom slightly toward the tile centre so adjacent
-        // tiles' skirts diverge below the shared edge instead of overlapping
-        // exactly -> removes the z-fighting between coincident skirts.
-        gridXZ = lerp(gridXZ, float2(0.5, 0.5), 0.02);
     }
     absPos.x = input.worldPos.x + gridXZ.x * input.scale;
     absPos.y = input.worldPos.y + (h * HEIGHT_SCALE) + skirtOffset;

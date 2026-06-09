@@ -202,20 +202,15 @@ void TerrainManager::InitGrid() {
         indices.push_back(tl); indices.push_back(br); indices.push_back(bl);
         indices.push_back(tl); indices.push_back(tr); indices.push_back(br);
     }
-    skirtOffset += (gridSize + 1);
-    mainOffset = gridSize * (gridSize + 1);
-    for (int x = 0; x < gridSize; x++) {
-        int tl = mainOffset + x; int tr = mainOffset + x + 1; int bl = skirtOffset + x; int br = skirtOffset + x + 1;
-        indices.push_back(tl); indices.push_back(bl); indices.push_back(br);
-        indices.push_back(tl); indices.push_back(br); indices.push_back(tr);
-    }
-    skirtOffset += (gridSize + 1);
-    for (int z = 0; z < gridSize; z++) {
-        int tl = z * (gridSize + 1); int bl = (z + 1) * (gridSize + 1); int tr = skirtOffset + z; int br = skirtOffset + z + 1;
-        indices.push_back(tl); indices.push_back(bl); indices.push_back(tr);
-        indices.push_back(bl); indices.push_back(br); indices.push_back(tr);
-    }
-    skirtOffset += (gridSize + 1);
+    // The -Z and -X edge skirts are intentionally omitted: every shared tile
+    // seam is covered by the +Z / +X skirt of exactly ONE of the two neighbours,
+    // so adjacent skirts never overlap and cannot z-fight. We still advance
+    // skirtOffset past ALL three preceding skirt vertex rows (+Z already drawn,
+    // then the unused -Z and -X rows) so the +X skirt loop below indexes the
+    // correct vertices (base = startVertex + 3*(gridSize+1)).
+    skirtOffset += (gridSize + 1); // past +Z skirt verts (already indexed)
+    skirtOffset += (gridSize + 1); // past unused -Z skirt verts
+    skirtOffset += (gridSize + 1); // -> +X skirt verts
     for (int z = 0; z < gridSize; z++) {
         int tl = z * (gridSize + 1) + gridSize; int bl = (z + 1) * (gridSize + 1) + gridSize; int tr = skirtOffset + z; int br = skirtOffset + z + 1;
         indices.push_back(tl); indices.push_back(tr); indices.push_back(bl);
@@ -265,6 +260,61 @@ void TerrainManager::ClearQueueOnly() {
     m_iLastEvictedCount = 0;
 }
 
+void TerrainManager::StitchWithNeighbors(const TileKey& key) {
+    auto itA = m_mapActiveChunks.find(key);
+    if (itA == m_mapActiveChunks.end()) return;
+    TerrainChunk* A = itA->second.get();
+    if (!A || A->m_CpuHeightW <= 1 || A->m_CpuHeightH <= 1) return;
+
+    const int W = A->m_CpuHeightW;
+    const int H = A->m_CpuHeightH;
+
+    auto findNeighbor = [&](int dx, int dy) -> TerrainChunk* {
+        TileKey nk{ key.iX + dx, key.iY + dy, key.iZoom };
+        auto it = m_mapActiveChunks.find(nk);
+        return (it != m_mapActiveChunks.end()) ? it->second.get() : nullptr;
+    };
+
+    // edge: 0 = East  (A col W-1  <-> B col 0,   per row)
+    //       1 = West  (A col 0    <-> B col W-1, per row)
+    //       2 = North (A row 0    <-> B row H-1, per col)  [+Z world, iY-1]
+    //       3 = South (A row H-1  <-> B row 0,   per col)  [-Z world, iY+1]
+    auto stitch = [&](TerrainChunk* B, int edge) -> bool {
+        if (!B) return false;
+        if (B->m_CpuHeightW != W || B->m_CpuHeightH != H) return false; // mismatched res
+        bool changed = false;
+        if (edge == 0 || edge == 1) {
+            int aCol = (edge == 0) ? (W - 1) : 0;
+            int bCol = (edge == 0) ? 0 : (W - 1);
+            for (int y = 0; y < H; ++y) {
+                uint16_t& a = A->m_CpuHeightData[y * W + aCol];
+                uint16_t& b = B->m_CpuHeightData[y * W + bCol];
+                uint16_t avg = (uint16_t)(((int)a + (int)b) / 2);
+                if (a != avg || b != avg) { a = avg; b = avg; changed = true; }
+            }
+        } else {
+            int aRow = (edge == 2) ? 0 : (H - 1);
+            int bRow = (edge == 2) ? (H - 1) : 0;
+            for (int x = 0; x < W; ++x) {
+                uint16_t& a = A->m_CpuHeightData[aRow * W + x];
+                uint16_t& b = B->m_CpuHeightData[bRow * W + x];
+                uint16_t avg = (uint16_t)(((int)a + (int)b) / 2);
+                if (a != avg || b != avg) { a = avg; b = avg; changed = true; }
+            }
+        }
+        if (changed) B->ReuploadHeight(m_rhi); // neighbour's edge changed too
+        return changed;
+    };
+
+    bool aChanged = false;
+    aChanged |= stitch(findNeighbor(+1, 0), 0); // East  (iX+1)
+    aChanged |= stitch(findNeighbor(-1, 0), 1); // West  (iX-1)
+    aChanged |= stitch(findNeighbor(0, -1), 2); // North (iY-1, +Z)
+    aChanged |= stitch(findNeighbor(0, +1), 3); // South (iY+1, -Z)
+
+    if (aChanged) A->ReuploadHeight(m_rhi);
+}
+
 void TerrainManager::Update(const std::vector<TileKey>& vecNeededTiles, float fHScale) {
     m_fCurrentHeightScale = fHScale;
     m_iLastNeededTileCount = (int)vecNeededTiles.size();
@@ -286,6 +336,9 @@ void TerrainManager::Update(const std::vector<TileKey>& vecNeededTiles, float fH
             auto pChunk = std::make_unique<TerrainChunk>();
             pChunk->CreateFromData(m_rhi, result, m_MapCfg);
             m_mapActiveChunks[result.m_Key] = std::move(pChunk);
+            // Match this tile's borders to its already-loaded neighbours so the
+            // shared edges have identical heights (no wall at the seam).
+            StitchWithNeighbors(result.m_Key);
         }
         uploaded++;
     }

@@ -117,10 +117,9 @@ D3D12_CPU_DESCRIPTOR_HANDLE RHI_DX12::AllocateSrvDescriptor(DX12Texture *tex) {
     return cpuHandle;
 }
 
-void LinearUploadHeap::Init(ID3D12Device *dev, UINT64 size) {
+void LinearUploadHeap::Init(D3D12MA::Allocator *allocator, UINT64 size) {
     capacity = size;
     cursor = 0;
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_UPLOAD};
     D3D12_RESOURCE_DESC rd = {D3D12_RESOURCE_DIMENSION_BUFFER,
                               0,
                               size,
@@ -131,9 +130,12 @@ void LinearUploadHeap::Init(ID3D12Device *dev, UINT64 size) {
                               {1, 0},
                               D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                               D3D12_RESOURCE_FLAG_NONE};
-    dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                 IID_PPV_ARGS(&buf));
+    D3D12MA::ALLOCATION_DESC ad = {};
+    ad.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12MA::Allocation *a = nullptr;
+    allocator->CreateResource(&ad, &rd, D3D12_RESOURCE_STATE_GENERIC_READ,
+                              nullptr, &a, IID_PPV_ARGS(&buf));
+    alloc.Attach(a);
     buf->Map(0, nullptr, reinterpret_cast<void **>(&cpu));
 }
 
@@ -156,9 +158,31 @@ void RHI_DX12::FreeSrvDescriptor(UINT index) {
     m_deferredSrvFree[fIdx].push_back(index);
 }
 
-void RHI_DX12::DeferResourceRelease(ComPtr<ID3D12Resource> res) {
-    if (res)
-        m_resourceGarbage[fIdx].push_back(std::move(res));
+void RHI_DX12::DeferResourceRelease(ComPtr<ID3D12Resource> res,
+                                   ComPtr<D3D12MA::Allocation> alloc) {
+    if (res || alloc)
+        m_resourceGarbage[fIdx].push_back({std::move(res), std::move(alloc)});
+}
+
+bool RHI_DX12::AllocResource(D3D12_HEAP_TYPE heapType,
+                             const D3D12_RESOURCE_DESC &desc,
+                             D3D12_RESOURCE_STATES state,
+                             const D3D12_CLEAR_VALUE *clear,
+                             ComPtr<ID3D12Resource> &outRes,
+                             ComPtr<D3D12MA::Allocation> &outAlloc) {
+    D3D12MA::ALLOCATION_DESC ad = {};
+    ad.HeapType = heapType;
+    D3D12MA::Allocation *a = nullptr;
+    HRESULT hr = m_allocator->CreateResource(
+        &ad, &desc, state, clear, &a,
+        IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf()));
+    if (FAILED(hr)) {
+        if (a)
+            a->Release();
+        return false;
+    }
+    outAlloc.Attach(a);
+    return true;
 }
 
 void RHI_DX12::OpenCopyList() {
@@ -186,10 +210,11 @@ void RHI_DX12::FlushCopyList() {
 DX12Texture::~DX12Texture() {
     if (hasBindlessSlot && ownerRHI) {
         ownerRHI->FreeSrvDescriptor(bindlessIndex);
-        // Keep the resource alive until the frame slot recycles (it may still
-        // be referenced by an in-flight command list).
-        if (res)
-            ownerRHI->DeferResourceRelease(std::move(res));
+        // Keep the resource AND its allocation alive until the frame slot recycles
+        // (both may still be referenced by an in-flight command list). They must
+        // be deferred together so the memory is not freed before the GPU is done.
+        if (res || alloc)
+            ownerRHI->DeferResourceRelease(std::move(res), std::move(alloc));
     }
 }
 bool RHI_DX12::Init(HWND hWnd, int width, int height) {
@@ -223,6 +248,17 @@ bool RHI_DX12::Init(HWND hWnd, int width, int height) {
 #endif
     ComPtr<IDXGIFactory4> fac;
     CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&fac));
+
+    // Create the D3D12MA allocator (needs the device + its adapter). All buffers
+    // and textures are sub-allocated through it from here on.
+    {
+        ComPtr<IDXGIAdapter> adapter;
+        fac->EnumAdapterByLuid(dev->GetAdapterLuid(), IID_PPV_ARGS(&adapter));
+        D3D12MA::ALLOCATOR_DESC ad = {};
+        ad.pDevice = dev.Get();
+        ad.pAdapter = adapter.Get();
+        D3D12MA::CreateAllocator(&ad, m_allocator.GetAddressOf());
+    }
 
     // check for tearing support
     ComPtr<IDXGIFactory5> factory5;
@@ -310,12 +346,10 @@ bool RHI_DX12::Init(HWND hWnd, int width, int height) {
                                {1, 0},
                                D3D12_TEXTURE_LAYOUT_UNKNOWN,
                                D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL};
-    D3D12_HEAP_PROPERTIES dHp = {D3D12_HEAP_TYPE_DEFAULT};
     D3D12_CLEAR_VALUE dCv = {DXGI_FORMAT_D32_FLOAT, {1.0f, 0}};
 
-    dev->CreateCommittedResource(&dHp, D3D12_HEAP_FLAG_NONE, &dsD,
-                                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &dCv,
-                                 IID_PPV_ARGS(&depth));
+    AllocResource(D3D12_HEAP_TYPE_DEFAULT, dsD, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                  &dCv, depth, m_depthAlloc);
     dev->CreateDepthStencilView(depth.Get(), nullptr,
                                 dsvH->GetCPUDescriptorHandleForHeapStart());
 
@@ -355,7 +389,7 @@ bool RHI_DX12::Init(HWND hWnd, int width, int height) {
         dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY,
                                     IID_PPV_ARGS(&copyAlc[i]));
         // 128 MB per frame is far more than a frame's worth of streamed tiles.
-        m_uploadHeap[i].Init(dev.Get(), 128ull * 1024 * 1024);
+        m_uploadHeap[i].Init(m_allocator.Get(), 128ull * 1024 * 1024);
     }
     dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, copyAlc[0].Get(),
                            nullptr, IID_PPV_ARGS(&copyCmd));
@@ -392,6 +426,7 @@ void RHI_DX12::Resize(int newW, int newH) {
         fenceValues[i] = fVal;
     }
     depth.Reset();
+    m_depthAlloc.Reset(); // free old depth allocation before recreating
 
     // Resize swap chain
     DXGI_SWAP_CHAIN_DESC1 sd;
@@ -420,11 +455,9 @@ void RHI_DX12::Resize(int newW, int newH) {
                                {1, 0},
                                D3D12_TEXTURE_LAYOUT_UNKNOWN,
                                D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL};
-    D3D12_HEAP_PROPERTIES dHp = {D3D12_HEAP_TYPE_DEFAULT};
     D3D12_CLEAR_VALUE dCv = {DXGI_FORMAT_D32_FLOAT, {1.0f, 0}};
-    dev->CreateCommittedResource(&dHp, D3D12_HEAP_FLAG_NONE, &dsD,
-                                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &dCv,
-                                 IID_PPV_ARGS(&depth));
+    AllocResource(D3D12_HEAP_TYPE_DEFAULT, dsD, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                  &dCv, depth, m_depthAlloc);
     dev->CreateDepthStencilView(depth.Get(), nullptr,
                                 dsvH->GetCPUDescriptorHandleForHeapStart());
 }
@@ -583,10 +616,9 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateRenderTarget(int w_in, int h_in,
         cv.Color[3] = 0.0f;
     }
 
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d,
-                                            D3D12_RESOURCE_STATE_RENDER_TARGET,
-                                            &cv, IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, d,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, t->res,
+                       t->alloc)) {
         return nullptr;
     }
     t->currentState = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -692,12 +724,10 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateShadowTexture(int width,
     D3D12_CLEAR_VALUE cv = {};
     cv.Format = DXGI_FORMAT_D32_FLOAT;
     cv.DepthStencil.Depth = 1.0f;
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
 
     // Texture starts in depth write mode
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d,
-                                            D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv,
-                                            IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, d,
+                       D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, t->res, t->alloc)) {
         return nullptr;
     }
     t->currentState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -753,12 +783,10 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
     t->height = tex.desc().height;
 
     D3D12_RESOURCE_DESC rd = mt::make_d3d12_resource_desc(tex.desc());
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
 
     // Each resource must start in the COMMON state in Vulkan and DX12
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                            IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, rd, D3D12_RESOURCE_STATE_COPY_DEST,
+                       nullptr, t->res, t->alloc)) {
         return nullptr;
     }
 
@@ -770,7 +798,7 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
 
 	// create upload buffer (RAM) for texture data, this is a staging buffer between disk and VRAM
     ComPtr<ID3D12Resource> upB;
-    D3D12_HEAP_PROPERTIES upHp = {D3D12_HEAP_TYPE_UPLOAD};
+    ComPtr<D3D12MA::Allocation> upBAlloc;
     D3D12_RESOURCE_DESC upD = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                0,
                                uploadSize,
@@ -782,9 +810,9 @@ RHI_DX12::CreateDDSTexture(const std::wstring &path) {
                                D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                D3D12_RESOURCE_FLAG_NONE};
 
-    if (FAILED(dev->CreateCommittedResource(&upHp, D3D12_HEAP_FLAG_NONE, &upD,
-                                            D3D12_RESOURCE_STATE_GENERIC_READ,
-                                            nullptr, IID_PPV_ARGS(&upB)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_UPLOAD, upD,
+                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, upB,
+                       upBAlloc)) {
         return nullptr;
     }
 
@@ -878,10 +906,8 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTextureFromData(const void *data,
     // the texture is then read via the bindless table on the graphics queue,
     // where common-state promotion handles the SRV read automatically. No
     // explicit barrier and (crucially) NO per-texture GPU flush.
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-                                            D3D12_RESOURCE_STATE_COMMON,
-                                            nullptr, IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, td, D3D12_RESOURCE_STATE_COMMON,
+                       nullptr, t->res, t->alloc)) {
         return nullptr;
     }
     t->currentState = D3D12_RESOURCE_STATE_COMMON;
@@ -969,11 +995,8 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
                               {1, 0},
                               D3D12_TEXTURE_LAYOUT_UNKNOWN,
                               D3D12_RESOURCE_FLAG_NONE};
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
-
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                            IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, td, D3D12_RESOURCE_STATE_COPY_DEST,
+                       nullptr, t->res, t->alloc)) {
         return nullptr;
     }
 
@@ -987,7 +1010,7 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
         return nullptr;
 
     ComPtr<ID3D12Resource> upB;
-    D3D12_HEAP_PROPERTIES upHp = {D3D12_HEAP_TYPE_UPLOAD};
+    ComPtr<D3D12MA::Allocation> upBAlloc;
     D3D12_RESOURCE_DESC upD = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                0,
                                upSize,
@@ -998,9 +1021,9 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateTexture(const std::wstring &path) {
                                {1, 0},
                                D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                D3D12_RESOURCE_FLAG_NONE};
-    if (FAILED(dev->CreateCommittedResource(&upHp, D3D12_HEAP_FLAG_NONE, &upD,
-                                            D3D12_RESOURCE_STATE_GENERIC_READ,
-                                            nullptr, IID_PPV_ARGS(&upB)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_UPLOAD, upD,
+                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, upB,
+                       upBAlloc)) {
         return nullptr;
     }
 
@@ -1080,7 +1103,6 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
 
     // 1. Special handling for Compute Shader (Unordered Access Views)
     if (type == BufferType::ComputeUAV) {
-        D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
         D3D12_RESOURCE_DESC rd = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                   0,
                                   size,
@@ -1092,9 +1114,11 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                   D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                   D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
 
-        if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                D3D12_RESOURCE_STATE_COPY_DEST,
-                                                nullptr, IID_PPV_ARGS(&b->res)))) {
+        // Buffers always start in COMMON (DX12 ignores any other initial state
+        // for buffers - warning #1328). The copy auto-promotes COMMON->COPY_DEST.
+        if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, rd,
+                           D3D12_RESOURCE_STATE_COMMON, nullptr, b->res,
+                           b->alloc)) {
             return nullptr;
         }
         b->currentState = D3D12_RESOURCE_STATE_COMMON;
@@ -1117,7 +1141,7 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
         // If we are uploading data
         if (data) {
             ComPtr<ID3D12Resource> stage;
-            D3D12_HEAP_PROPERTIES shp = {D3D12_HEAP_TYPE_UPLOAD};
+            ComPtr<D3D12MA::Allocation> stageAlloc;
             D3D12_RESOURCE_DESC srd = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                        0,
                                        size,
@@ -1129,9 +1153,9 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                        D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                        D3D12_RESOURCE_FLAG_NONE};
 
-            if (FAILED(dev->CreateCommittedResource(&shp, D3D12_HEAP_FLAG_NONE, &srd,
-                                                    D3D12_RESOURCE_STATE_GENERIC_READ,
-                                                    nullptr, IID_PPV_ARGS(&stage))))
+            if (!AllocResource(D3D12_HEAP_TYPE_UPLOAD, srd,
+                               D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, stage,
+                               stageAlloc))
                 return nullptr;
 
             void *p;
@@ -1192,7 +1216,6 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                             (data != nullptr);
 
     if (isStaticGeometry) {
-        D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
         D3D12_RESOURCE_DESC rd = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                   0,
                                   size,
@@ -1204,16 +1227,18 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                   D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                   D3D12_RESOURCE_FLAG_NONE};
 
-        if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                D3D12_RESOURCE_STATE_COPY_DEST,
-                                                nullptr, IID_PPV_ARGS(&b->res)))) {
+        // Buffers always start in COMMON (DX12 ignores any other initial state
+        // for buffers - warning #1328). The copy auto-promotes COMMON->COPY_DEST.
+        if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, rd,
+                           D3D12_RESOURCE_STATE_COMMON, nullptr, b->res,
+                           b->alloc)) {
             return nullptr;
         }
         b->currentState = D3D12_RESOURCE_STATE_COMMON;
 
         if (data) {
             ComPtr<ID3D12Resource> stage;
-            D3D12_HEAP_PROPERTIES shp = {D3D12_HEAP_TYPE_UPLOAD};
+            ComPtr<D3D12MA::Allocation> stageAlloc;
             D3D12_RESOURCE_DESC srd = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                        0,
                                        size,
@@ -1224,9 +1249,9 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                        {1, 0},
                                        D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                        D3D12_RESOURCE_FLAG_NONE};
-            if (FAILED(dev->CreateCommittedResource(&shp, D3D12_HEAP_FLAG_NONE, &srd,
-                                                    D3D12_RESOURCE_STATE_GENERIC_READ,
-                                                    nullptr, IID_PPV_ARGS(&stage))))
+            if (!AllocResource(D3D12_HEAP_TYPE_UPLOAD, srd,
+                               D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, stage,
+                               stageAlloc))
                 return nullptr;
 
             void *p;
@@ -1275,7 +1300,6 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
 
         // Double buffering means allocating 2x the memory
         UINT64 totalSize = alignedSize * FrameCount;
-        D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_UPLOAD};
         D3D12_RESOURCE_DESC rd = {D3D12_RESOURCE_DIMENSION_BUFFER,
                                   0,
                                   totalSize,
@@ -1287,9 +1311,9 @@ std::shared_ptr<RHIBuffer> RHI_DX12::CreateBuffer(BufferType type,
                                   D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
                                   D3D12_RESOURCE_FLAG_NONE};
 
-        if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                D3D12_RESOURCE_STATE_GENERIC_READ,
-                                                nullptr, IID_PPV_ARGS(&b->res)))) {
+        if (!AllocResource(D3D12_HEAP_TYPE_UPLOAD, rd,
+                           D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, b->res,
+                           b->alloc)) {
             return nullptr;
         }
         b->currentState = D3D12_RESOURCE_STATE_GENERIC_READ;
@@ -1432,12 +1456,11 @@ std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &conf
         rp[10].Descriptor = {2, 0}; // Bones (b2)
     }
 
-    D3D12_STATIC_SAMPLER_DESC smp[2] = {};
+    D3D12_STATIC_SAMPLER_DESC smp[3] = {};
     smp[0].Filter = D3D12_FILTER_ANISOTROPIC;
     smp[0].MaxAnisotropy = 16;
     smp[0].ShaderRegister = 0;
-    // WRAP: needed by tiled model textures (e.g. the floor). The terrain avoids
-    // the wrap at tile edges by clamping its UV inside the shader instead.
+    // WRAP (s0): needed by tiled model textures (e.g. the floor).
     smp[0].AddressU = smp[0].AddressV = smp[0].AddressW =
         D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     smp[0].MaxLOD = D3D12_FLOAT32_MAX;
@@ -1449,8 +1472,18 @@ std::shared_ptr<RHIPipeline> RHI_DX12::CreatePipeline(const PipelineConfig &conf
     smp[1].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
     smp[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
+    // CLAMP (s2): dedicated terrain sampler. Edge texels never wrap to the
+    // opposite side, so adjacent tiles no longer pull in a far-edge sample at
+    // the seam - and no hardcoded half-texel UV clamp is needed in the shader.
+    smp[2].Filter = D3D12_FILTER_ANISOTROPIC;
+    smp[2].MaxAnisotropy = 16;
+    smp[2].ShaderRegister = 2;
+    smp[2].AddressU = smp[2].AddressV = smp[2].AddressW =
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    smp[2].MaxLOD = D3D12_FLOAT32_MAX;
+
     D3D12_ROOT_SIGNATURE_DESC rsd = {
-                                     rootParamCount, rp, 2, smp,
+                                     rootParamCount, rp, 3, smp,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
     ComPtr<ID3DBlob> sig;
     D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig, 0);
@@ -1684,10 +1717,8 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture(int w_in, int h_in,
     d.Format = fmt;
     d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    D3D12_HEAP_PROPERTIES hp = {D3D12_HEAP_TYPE_DEFAULT};
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d,
-                                            D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                            IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, d, D3D12_RESOURCE_STATE_COMMON,
+                       nullptr, t->res, t->alloc)) {
         return nullptr;
     }
     t->currentState = D3D12_RESOURCE_STATE_COMMON;
@@ -1786,8 +1817,8 @@ std::shared_ptr<RHITexture> RHI_DX12::CreateUAVTexture3D(int w_in, int h_in, int
     d.Format = fmt;
     d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    D3D12_HEAP_PROPERTIES hp = { D3D12_HEAP_TYPE_DEFAULT };
-    if (FAILED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&t->res)))) {
+    if (!AllocResource(D3D12_HEAP_TYPE_DEFAULT, d, D3D12_RESOURCE_STATE_COMMON,
+                       nullptr, t->res, t->alloc)) {
         return nullptr;
     }
     t->currentState = D3D12_RESOURCE_STATE_COMMON;

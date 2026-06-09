@@ -9,14 +9,7 @@
 /// Vulkan IMPLEMENTATION
 /// =============================================================
 /// =============================================================
- 
-struct VkUploadHeap {
-	VkBuffer buf = VK_NULL_HANDLE;
-	VmaAllocation alloc = VK_NULL_HANDLE;
-	uint8_t* cpu = nullptr;
-	VkDeviceSize cap = 0;
-	VkDeviceSize cursor = 0;
-};
+
 
 class RHI_Vulkan : public RHI {
 private:
@@ -28,6 +21,22 @@ private:
 	VkSwapchainKHR swapchain = VK_NULL_HANDLE;
 	VkQueue graphicsQueue = VK_NULL_HANDLE;
 	VmaAllocator allocator = VK_NULL_HANDLE;
+
+	// --- ASYNC TRANSFER (dedicated DMA copy queue, with graphics-queue fallback) ---
+	// On a GPU that exposes a transfer-only queue family, streamed-texture copies
+	// run on a real DMA engine in parallel with rendering. The ownership of each
+	// uploaded image is transferred transfer-family -> graphics-family (release on
+	// the transfer queue, acquire on the graphics queue). If no dedicated family
+	// exists, m_transferQueue == graphicsQueue and no ownership transfer is done.
+	uint32_t m_graphicsFamily = 0;
+	uint32_t m_transferFamily = 0;
+	VkQueue m_transferQueue = VK_NULL_HANDLE;
+	bool m_hasDedicatedTransfer = false;
+	VkCommandPool m_transferPool = VK_NULL_HANDLE;
+	// Queue-family ACQUIRE barriers for images uploaded on the transfer queue this
+	// frame; recorded on the graphics command buffer at BeginFrame (uploads happen
+	// during Update, before BeginFrame). Empty in the fallback path.
+	std::vector<VkImageMemoryBarrier> m_pendingAcquires;
 
 	// --- RENDER PASSES ---
 	VkRenderPass mainRenderPass = VK_NULL_HANDLE; // UI and final output to screen (No Depth)
@@ -54,6 +63,7 @@ private:
 	VkDescriptorPool imguiPool = VK_NULL_HANDLE;
 	VkSampler mainSampler = VK_NULL_HANDLE;
 	VkSampler shadowSampler = VK_NULL_HANDLE;
+	VkSampler m_terrainSampler = VK_NULL_HANDLE; // CLAMP sampler for terrain (s2)
 	std::vector<VkDescriptorImageInfo> m_bindlessImageInfos;
 	uint32_t m_bindlessTextureCount = 0;
 
@@ -69,7 +79,13 @@ private:
 	// Streamed textures (terrain) stage into a per-frame ring buffer and record
 	// their copies into a per-frame upload command buffer, which is batched into
 	// the frame's submit. Replaces the per-texture SingleTimeCommand + queue idle.
-
+	struct VkUploadHeap {
+		VkBuffer buf = VK_NULL_HANDLE;
+		VmaAllocation alloc = VK_NULL_HANDLE;
+		uint8_t* cpu = nullptr;
+		VkDeviceSize cap = 0;
+		VkDeviceSize cursor = 0;
+	};
 	std::vector<VkUploadHeap> m_uploadHeaps;      // per frame
 	std::vector<VkCommandBuffer> uploadCmds;      // per frame
 	std::vector<VkSemaphore> uploadSemaphores;    // per frame: upload submit -> render submit

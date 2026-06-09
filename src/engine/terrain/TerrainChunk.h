@@ -25,5 +25,10 @@ public:
 
     void CreateFromData(RHI* rhi, const LoadedTileData& data, const MapConfig& mapCfg);
 
+    // Rebuild the height texture from (possibly edited) m_CpuHeightData. Used by
+    // edge stitching after a shared border row/column has been averaged with a
+    // neighbour. The old texture is released via the RHI's deferred destruction.
+    void ReuploadHeight(RHI* rhi);
+
     float GetHeightAtUV(double u, double v) const;
 };

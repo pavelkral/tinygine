@@ -505,6 +505,8 @@ RHI_Vulkan::~RHI_Vulkan() {
         if (s)
             vkDestroySemaphore(device, s, nullptr);
     }
+    if (m_transferPool)
+        vkDestroyCommandPool(device, m_transferPool, nullptr);
 }
 
 bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
@@ -568,11 +570,61 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     vkGetPhysicalDeviceProperties(physDevice, &deviceProps);
     minUboAlignment = deviceProps.limits.minUniformBufferOffsetAlignment;
 
+    // --- QUEUE FAMILY SELECTION ---
+    // Graphics stays family 0 (the present-capable graphics family, as before).
+    // Additionally look for a DEDICATED transfer family (TRANSFER bit but no
+    // GRAPHICS/COMPUTE) = a real DMA engine, so streamed copies run in parallel
+    // with rendering. If none exists, fall back to the graphics queue.
+    uint32_t qfCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physDevice, &qfCount, nullptr);
+    std::vector<VkQueueFamilyProperties> qfProps(qfCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physDevice, &qfCount, qfProps.data());
+
+    m_graphicsFamily = 0;
+    m_transferFamily = m_graphicsFamily;
+    m_hasDedicatedTransfer = false;
+    for (uint32_t i = 0; i < qfCount; ++i) {
+        const VkQueueFlags f = qfProps[i].queueFlags;
+        if ((f & VK_QUEUE_TRANSFER_BIT) && !(f & VK_QUEUE_GRAPHICS_BIT) &&
+            !(f & VK_QUEUE_COMPUTE_BIT) && qfProps[i].queueCount > 0) {
+            m_transferFamily = i;
+            m_hasDedicatedTransfer = true;
+            break;
+        }
+    }
+
+    // Report which upload path is active (console + VS output window).
+    {
+        char buf[256];
+        if (m_hasDedicatedTransfer) {
+            snprintf(buf, sizeof(buf),
+                     "[Vulkan] GPU '%s': DEDICATED transfer queue ACTIVE "
+                     "(graphics family %u, transfer family %u) -> async DMA uploads\n",
+                     deviceProps.deviceName, m_graphicsFamily, m_transferFamily);
+        } else {
+            snprintf(buf, sizeof(buf),
+                     "[Vulkan] GPU '%s': no dedicated transfer family found "
+                     "(family %u) -> FALLBACK, uploads on the graphics queue\n",
+                     deviceProps.deviceName, m_graphicsFamily);
+        }
+        std::cout << buf;
+        OutputDebugStringA(buf);
+    }
+
     float queuePriority = 1.0f;
-    VkDeviceQueueCreateInfo queueInfo = {
-                                         VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-    queueInfo.queueCount = 1;
-    queueInfo.pQueuePriorities = &queuePriority;
+    VkDeviceQueueCreateInfo queueInfos[2] = {};
+    queueInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueInfos[0].queueFamilyIndex = m_graphicsFamily;
+    queueInfos[0].queueCount = 1;
+    queueInfos[0].pQueuePriorities = &queuePriority;
+    uint32_t queueInfoCount = 1;
+    if (m_hasDedicatedTransfer) {
+        queueInfos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueInfos[1].queueFamilyIndex = m_transferFamily;
+        queueInfos[1].queueCount = 1;
+        queueInfos[1].pQueuePriorities = &queuePriority;
+        queueInfoCount = 2;
+    }
 
     VkPhysicalDeviceFeatures features = {};
     features.samplerAnisotropy = VK_TRUE;
@@ -588,15 +640,19 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
                                 VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME};
 
     VkDeviceCreateInfo deviceInfo = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    deviceInfo.queueCreateInfoCount = 1;
-    deviceInfo.pQueueCreateInfos = &queueInfo;
+    deviceInfo.queueCreateInfoCount = queueInfoCount;
+    deviceInfo.pQueueCreateInfos = queueInfos;
     deviceInfo.enabledExtensionCount = 3;
     deviceInfo.ppEnabledExtensionNames = deviceExts;
     deviceInfo.pEnabledFeatures = &features;
     deviceInfo.pNext = &descriptorIndexing;
 
     vkCreateDevice(physDevice, &deviceInfo, nullptr, &device);
-    vkGetDeviceQueue(device, 0, 0, &graphicsQueue);
+    vkGetDeviceQueue(device, m_graphicsFamily, 0, &graphicsQueue);
+    if (m_hasDedicatedTransfer)
+        vkGetDeviceQueue(device, m_transferFamily, 0, &m_transferQueue);
+    else
+        m_transferQueue = graphicsQueue; // fallback: same queue, no QFOT
 
     VmaAllocatorCreateInfo vmaInfo = {};
     vmaInfo.physicalDevice = physDevice;
@@ -822,6 +878,20 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     shadowSamplerInfo.compareOp = VK_COMPARE_OP_LESS;
     vkCreateSampler(device, &shadowSamplerInfo, nullptr, &shadowSampler);
 
+    // Dedicated terrain sampler (s2): CLAMP so edge texels never wrap to the
+    // opposite side at tile seams. Lets the terrain shader sample raw 0..1 UVs.
+    VkSamplerCreateInfo terrainSamplerInfo = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    terrainSamplerInfo.magFilter = VK_FILTER_LINEAR;
+    terrainSamplerInfo.minFilter = VK_FILTER_LINEAR;
+    terrainSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    terrainSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    terrainSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    terrainSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    terrainSamplerInfo.maxAnisotropy = 16.0f;
+    terrainSamplerInfo.anisotropyEnable = VK_TRUE;
+    terrainSamplerInfo.maxLod = 12.0f;
+    vkCreateSampler(device, &terrainSamplerInfo, nullptr, &m_terrainSampler);
+
     // --- SYNCHRONIZATION ---
     imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
@@ -844,10 +914,20 @@ bool RHI_Vulkan::Init(HWND hWnd, int w, int h) {
     m_deferredBindlessFree.resize(MAX_FRAMES_IN_FLIGHT);
     m_imageGarbage.resize(MAX_FRAMES_IN_FLIGHT);
 
+    // Upload command buffers come from a pool on the TRANSFER family (== graphics
+    // family in the fallback case), so they can be submitted to the dedicated
+    // DMA queue.
+    {
+        VkCommandPoolCreateInfo tpInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        tpInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        tpInfo.queueFamilyIndex = m_transferFamily;
+        vkCreateCommandPool(device, &tpInfo, nullptr, &m_transferPool);
+    }
+
     uploadCmds.resize(MAX_FRAMES_IN_FLIGHT);
     VkCommandBufferAllocateInfo upAlloc = {
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    upAlloc.commandPool = cmdPool;
+    upAlloc.commandPool = m_transferPool;
     upAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     upAlloc.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
     vkAllocateCommandBuffers(device, &upAlloc, uploadCmds.data());
@@ -1256,6 +1336,12 @@ RHI_Vulkan::CreatePipeline(const PipelineConfig &config) {
                                   VK_SHADER_STAGE_VERTEX_BIT |
                                       VK_SHADER_STAGE_FRAGMENT_BIT,
                                   &mainSampler});
+        // s2 -> binding 13 (s-shift 11): CLAMP terrain sampler. Used in both the
+        // vertex (heightmap) and fragment (color) stages of the terrain shader.
+        activeBindings.push_back({13, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
+                                  VK_SHADER_STAGE_VERTEX_BIT |
+                                      VK_SHADER_STAGE_FRAGMENT_BIT,
+                                  &m_terrainSampler});
     } else {
         // Define generic layout mapping for modern PBR engine
         VkDescriptorSetLayoutBinding bindings[13] = {};
@@ -1660,6 +1746,22 @@ void RHI_Vulkan::BeginFrame() {
                                           VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     vkBeginCommandBuffer(cmdBuffers[currentFrame], &beginInfo);
     isPassRunning = false;
+
+    // ACQUIRE images that were uploaded on the dedicated transfer queue this
+    // frame (their copies were recorded during Update, before BeginFrame). This
+    // completes the queue-family ownership transfer started by the release
+    // barrier on the transfer queue; the render submit waits on the upload
+    // semaphore, so the release has finished before these execute.
+    if (!m_pendingAcquires.empty()) {
+        vkCmdPipelineBarrier(cmdBuffers[currentFrame],
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr,
+                             static_cast<uint32_t>(m_pendingAcquires.size()),
+                             m_pendingAcquires.data());
+        m_pendingAcquires.clear();
+    }
 }
 
 void RHI_Vulkan::EndFrame() {
@@ -1685,7 +1787,10 @@ void RHI_Vulkan::EndFrame() {
         us.pCommandBuffers = &uploadCmds[currentFrame];
         us.signalSemaphoreCount = 1;
         us.pSignalSemaphores = &uploadSemaphores[currentFrame];
-        vkQueueSubmit(graphicsQueue, 1, &us, VK_NULL_HANDLE);
+        // On a dedicated DMA queue this runs in parallel with rendering; the
+        // render submit below waits on the semaphore (and acquires ownership).
+        // In the fallback path m_transferQueue == graphicsQueue.
+        vkQueueSubmit(m_transferQueue, 1, &us, VK_NULL_HANDLE);
         uploadOpen = false;
         didUpload = true;
     }
@@ -1919,6 +2024,8 @@ RHI_Vulkan::CreateTextureFromData(const void* data, size_t dataSize, int width,
         barrier.subresourceRange.levelCount = static_cast<uint32_t>(mipLevels);
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = 1;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &barrier);
@@ -1928,16 +2035,41 @@ RHI_Vulkan::CreateTextureFromData(const void* data, size_t dataSize, int width,
                                static_cast<uint32_t>(regions.size()),
                                regions.data());
 
-        // This barrier (TRANSFER -> VERTEX/FRAGMENT) also synchronizes the
-        // render commands batched after this upload buffer in the frame submit.
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+        if (m_hasDedicatedTransfer) {
+            // RELEASE the image from the transfer family (the matching ACQUIRE is
+            // recorded on the graphics queue at BeginFrame). The layout
+            // transition TRANSFER_DST -> SHADER_READ is performed by this pair.
+            // dstAccess/dstStage are "none" on the releasing (transfer) queue.
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = 0;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcQueueFamilyIndex = m_transferFamily;
+            barrier.dstQueueFamilyIndex = m_graphicsFamily;
+            vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &barrier);
+
+            // Queue the matching ACQUIRE for the graphics command buffer.
+            VkImageMemoryBarrier acquire = barrier;
+            acquire.srcAccessMask = 0;
+            acquire.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            m_pendingAcquires.push_back(acquire);
+        } else {
+            // Single queue (fallback): plain layout transition, no ownership
+            // transfer. Also synchronizes the render commands that wait on the
+            // upload semaphore in the frame submit.
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        }
     }
 
     VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};

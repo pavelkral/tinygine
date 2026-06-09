@@ -2,6 +2,8 @@
 
 Texture2D g_Textures[MAX_BINDLESS_TEXTURES] : register(t0, space0);
 SamplerState g_Sampler : register(s0);
+// Dedicated terrain sampler: CLAMP addressing (see terrain.vert.hlsl).
+SamplerState g_SamplerClamp : register(s2);
 
 struct PS_IN
 {
@@ -29,10 +31,9 @@ PixelOutput PSMain(PS_IN input)
     if (realNormal.y < 0.0)
         realNormal = -realNormal; // Make sure it points up
 
-    // Bindless color sampling. Clamp UV inside the tile (same as the heightmap)
-    // so the WRAP sampler never pulls the opposite edge in at the seam.
-    float2 cUV = clamp(input.uv, 0.5 / 256.0, 1.0 - 0.5 / 256.0);
-    float4 color = g_Textures[NonUniformResourceIndex(input.colorIdx)].Sample(g_Sampler, cUV);
+    // Bindless color sampling with the CLAMP terrain sampler (raw 0..1 UV; the
+    // edge texel never wraps to the opposite side at the seam).
+    float4 color = g_Textures[NonUniformResourceIndex(input.colorIdx)].Sample(g_SamplerClamp, input.uv);
 
     PixelOutput output;
     output.Color = color;

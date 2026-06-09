@@ -31,6 +31,20 @@ void TerrainChunk::CreateFromData(RHI* rhi, const LoadedTileData& data, const Ma
     }
 }
 
+void TerrainChunk::ReuploadHeight(RHI* rhi) {
+    if (m_CpuHeightData.empty() || m_CpuHeightW <= 0 || m_CpuHeightH <= 0)
+        return;
+
+    const uint8_t* pStart = reinterpret_cast<const uint8_t*>(m_CpuHeightData.data());
+    std::vector<uint8_t> byteData(pStart, pStart + m_CpuHeightData.size() * 2);
+
+    // Replacing the shared_ptr drops the previous texture, whose RHI destructor
+    // defers the GPU resource/slot release until the frame is safely retired.
+    m_TexHeight = rhi->CreateTextureFromData(byteData.data(), byteData.size(),
+                                             m_CpuHeightW, m_CpuHeightH,
+                                             DXGI_FORMAT_R16_UNORM);
+}
+
 float TerrainChunk::GetHeightAtUV(double u, double v) const {
     if (m_CpuHeightData.empty()) return 0.0f;
 

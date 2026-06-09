@@ -4,20 +4,13 @@
 #include "rhi/RHI.h"
 #include "rhi/backend_types/DX12Types.h"
 
-/// =============================================================
-/// =============================================================
-/// DX12 IMPLEMENTATION
-/// =============================================================
-/// =============================================================
-
-
 /// Persistent, per-frame mapped UPLOAD ring buffer. Allocations are a simple
 /// cursor bump (no per-call resource creation), reset once per frame after the
 /// GPU is known to be done with that frame's slot. Replaces the old pattern of
 /// creating a fresh staging buffer + command list + full GPU flush per texture.
-
 struct LinearUploadHeap {
     ComPtr<ID3D12Resource> buf;
+    ComPtr<D3D12MA::Allocation> alloc; // D3D12MA backing for `buf`
     uint8_t* cpu = nullptr;
     UINT64 capacity = 0;
     UINT64 cursor = 0;
@@ -28,10 +21,16 @@ struct LinearUploadHeap {
         UINT64 offset;
     };
 
-    void Init(ID3D12Device* dev, UINT64 size);
+    void Init(D3D12MA::Allocator* allocator, UINT64 size);
     void Reset() { cursor = 0; }
     Alloc Allocate(UINT64 size, UINT64 align);
 };
+
+/// =============================================================
+/// =============================================================
+/// DX12 IMPLEMENTATION
+/// =============================================================
+/// =============================================================
 
 class RHI_DX12 : public RHI {
 private:
@@ -40,6 +39,12 @@ private:
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<IDXGISwapChain3> swap;
     ComPtr<ID3D12GraphicsCommandList> cmd;
+
+    // --- GPU MEMORY ALLOCATOR ---
+    // D3D12MA sub-allocates all buffers/textures into large heaps instead of one
+    // committed heap per resource (parity with the Vulkan VMA path). Big win for
+    // terrain streaming, which creates/destroys many small tile textures.
+    ComPtr<D3D12MA::Allocator> m_allocator;
 
     // --- DESCRIPTOR HEAPS (Memory for pointers to textures and buffers) ---
     ComPtr<ID3D12DescriptorHeap> rtvH; // Render Target Views (Screens)
@@ -60,6 +65,7 @@ private:
     // --- RENDER TARGETS ---
     std::shared_ptr<DX12Texture> m_backBuffers[FrameCount];
     ComPtr<ID3D12Resource> depth;
+    ComPtr<D3D12MA::Allocation> m_depthAlloc; // D3D12MA backing for `depth`
     int w, h;
     BOOL tearingSupported = FALSE;
 
@@ -98,7 +104,14 @@ private:
     // once the frame index cycles back (GPU guaranteed done), avoiding
     // use-after-free of descriptors/resources still referenced in flight.
     std::vector<UINT> m_deferredSrvFree[FrameCount];
-    std::vector<ComPtr<ID3D12Resource>> m_resourceGarbage[FrameCount];
+    // A retired resource and its D3D12MA allocation must be released TOGETHER and
+    // only after the GPU is done with the resource, otherwise freeing the memory
+    // early corrupts in-flight reads.
+    struct RetiredResource {
+        ComPtr<ID3D12Resource> res;
+        ComPtr<D3D12MA::Allocation> alloc;
+    };
+    std::vector<RetiredResource> m_resourceGarbage[FrameCount];
 
     void OpenCopyList();
     void FlushCopyList();
@@ -108,12 +121,20 @@ private:
     void TransitionBuffer(ID3D12Resource *res, D3D12_RESOURCE_STATES before,
                           D3D12_RESOURCE_STATES after);
     D3D12_CPU_DESCRIPTOR_HANDLE AllocateSrvDescriptor(DX12Texture *tex);
+    // Allocate a GPU resource through D3D12MA (replaces CreateCommittedResource).
+    bool AllocResource(D3D12_HEAP_TYPE heapType, const D3D12_RESOURCE_DESC &desc,
+                       D3D12_RESOURCE_STATES state,
+                       const D3D12_CLEAR_VALUE *clear,
+                       ComPtr<ID3D12Resource> &outRes,
+                       ComPtr<D3D12MA::Allocation> &outAlloc);
 
 public:
     // Retire a bindless SRV slot (called by ~DX12Texture). Recycled later.
     void FreeSrvDescriptor(UINT index);
-    // Keep a GPU resource alive until the current frame slot is recycled.
-    void DeferResourceRelease(ComPtr<ID3D12Resource> res);
+    // Keep a GPU resource (and its allocation) alive until the current frame slot
+    // is recycled. Both are released together once the GPU is guaranteed done.
+    void DeferResourceRelease(ComPtr<ID3D12Resource> res,
+                              ComPtr<D3D12MA::Allocation> alloc);
 
     bool Init(HWND hWnd, int width, int height) override;
     void GetSize(int &outW, int &outH) const override;

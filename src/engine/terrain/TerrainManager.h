@@ -49,6 +49,11 @@ private:
 
     void WorkerLoop();
     void InitGrid();
+    // Average the shared border row/column of height data between a newly loaded
+    // chunk and each already-present neighbour, then re-upload the affected
+    // heightmaps. This makes adjacent tile edges agree on height so there is no
+    // vertical step (wall) at the seam.
+    void StitchWithNeighbors(const TileKey& key);
 
 public:
     TerrainManager();
