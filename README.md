@@ -4,15 +4,17 @@ A lightweight, multi-API 3D game engine.
 
 <table>
   <tr>
-    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png" alt="Obrázek 1"></td>
-    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2"></td>
+    <td width="50%">
+      <img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png" alt="Screenshot 1" width="100%">
+    </td>
+    <td width="50%">
+      <img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2">
+    </td>
   </tr>
-  
+ 
 </table>
-
 ![Language](https://img.shields.io/badge/Language-C%2B%2B17-blue)
 ![API](https://img.shields.io/badge/API-DirectX%2012-green)
-![API](https://img.shields.io/badge/API-DirectX%2011-green)
 ![API](https://img.shields.io/badge/API-Vulkan-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-orange)
