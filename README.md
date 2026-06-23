@@ -11,8 +11,8 @@ A lightweight, multi-API 3D game engine.
       <img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2">
     </td>
   </tr>
- 
 </table>
+
 ![Language](https://img.shields.io/badge/Language-C%2B%2B17-blue)
 ![API](https://img.shields.io/badge/API-DirectX%2012-green)
 ![API](https://img.shields.io/badge/API-Vulkan-green)
