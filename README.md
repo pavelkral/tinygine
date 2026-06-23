@@ -10,8 +10,6 @@ A lightweight, multi-API 3D game engine.
   
 </table>
 
-![Screenshot](https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png)
-
 ![Language](https://img.shields.io/badge/Language-C%2B%2B17-blue)
 ![API](https://img.shields.io/badge/API-DirectX%2012-green)
 ![API](https://img.shields.io/badge/API-DirectX%2011-green)
@@ -21,7 +19,7 @@ A lightweight, multi-API 3D game engine.
 
 ## Features
 
-At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
+At the core of the engine is abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
 * **API Support:** Fully implemented backends for **DirectX 12** and **Vulkan**.
 * **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer pre-pass mapping for Color, Normal, and World Position).
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
