@@ -2,6 +2,14 @@
 
 A lightweight, multi-API 3D game engine. 
 
+<table>
+  <tr>
+    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png" alt="Obrázek 1" width="100%"></td>
+    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2" width="100%"></td>
+  </tr>
+  
+</table>
+
 ![Screenshot](https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png)
 
 ![Language](https://img.shields.io/badge/Language-C%2B%2B17-blue)
@@ -14,7 +22,7 @@ A lightweight, multi-API 3D game engine.
 ## Features
 
 At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
-* **API Support:** Fully implemented backends for **DirectX 12**, **Vulkan**, and **DirectX 11**.
+* **API Support:** Fully implemented backends for **DirectX 12** and **Vulkan**.
 * **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer pre-pass mapping for Color, Normal, and World Position).
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
 * **Skeletal Animation (Assimp):** Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
@@ -125,7 +133,7 @@ The engine relies on the following libraries (ensure they are linked in your pro
 Note: If no saved .json scene is found in the assets/ folder, the engine will generate a default "Bootstrap" demo level.
 
 
-## Controls
+## Editor Controls
 * `TAB`: Toggle between Editor UI mode (cursor visible) and FPS Camera mode.
 * `W, A, S, D`: Move camera (in FPS mode).
 * `Q, E`: Move camera down/up (in FPS mode).
