@@ -4,8 +4,8 @@ A lightweight, multi-API 3D game engine.
 
 <table>
   <tr>
-    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png" alt="Obrázek 1" width="100%"></td>
-    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2" width="100%"></td>
+    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png" alt="Obrázek 1"></td>
+    <td valign="top"><img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2"></td>
   </tr>
   
 </table>
