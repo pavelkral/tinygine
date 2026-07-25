@@ -21,12 +21,10 @@ A lightweight, multi-API 3D game engine.
 
 ## Features
 
-At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
 * **API Support:** Fully implemented backends for **DirectX 12** and **Vulkan**.
 * **Data-Driven RHI (as a DLL):** The RHI ships as a standalone `rhi.dll` with **data-described bind-group layouts** and a **command-list** recording API (Qt QRhi / NVRHI style) — no hardcoded root signatures, backends are fully swappable.
 * **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer mapping for Color, Normal, and World Position). Lighting is computed forward into the MRT.
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls, batched per material.
-* **GPU-Driven Rendering (Indirect Draw):** Compute-shader frustum culling compacts the visible instance list into a GPU buffer, then a single `DrawIndexedIndirect` issues the whole batch — zero per-object CPU cost.
 * **Frustum Culling:** CPU sphere + AABB culling for the main camera **and** every shadow cascade, toggleable live with on-screen statistics.
 * **Skeletal Animation (Assimp):** Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
 * **Compute Shader Integration:** Direct access to Compute Pipelines for parallel GPU calculations (UAV/SRV textures, buffers).
@@ -58,14 +56,6 @@ At the core of the engine is a highly abstracted **RHI (Render Hardware Interfac
 * **Bloom:** Soft-threshold glow rendered via ping-pong render targets.
 * **Vignette:** Cinematic lens shading.
 
-###  Anti-Aliasing (TAA)
-
-* **Temporal Anti-Aliasing:** Sub-pixel **Halton** projection jitter accumulated across frames via **camera reprojection** (from the world-position G-Buffer), with a 3×3 neighborhood colour clamp and ping-pong HDR history buffers. Delivers supersampling-quality edges and is the enabler for dense foliage/vegetation.
-
-###  HDR Rendering & Tonemapping
-
-* **Full 16-bit Float HDR Chain:** The entire offscreen pipeline is linear HDR; there is a **single** ACES filmic tonemap + gamma pass at the very end.
-* **Exposure Control:** Live exposure slider feeding the final tonemap pass.
 
 ###  Cascaded Shadow Maps (CSM)
 
@@ -139,9 +129,6 @@ The engine ships with a few game-ready components:
 * **Physics:** `Rigidbody`, `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider`, `SkeletalRagdollComponent`.
 * **Gameplay Logic:** `PlayerController`.
 * **Utility:** `AudioSource`, `Animator`.
-
-
-> 📖 Detailed HTML docs live in [`doc/enginedoc`](doc/enginedoc/index.html) (engine architecture, components, vertex layouts) and [`doc/rhidoc`](doc/rhidoc/index.html) (RHI class view, dataflow, code examples).
 
 ## Getting Started
 
