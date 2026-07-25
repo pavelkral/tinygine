@@ -8,17 +8,10 @@ A lightweight, multi-API 3D game engine.
     <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080232.png" width="100%" alt="tgine"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" width="100%" alt="tgine"></td>
-    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080451.png" width="100%" alt="tgine"></td>
-  </tr>
-   <tr>
     <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20221958.png" width="100%" alt="tgine"></td>
-    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20221705.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" width="100%" alt="tgine"></td>  
   </tr>
-  <tr>
-    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080145.png" width="100%" alt="tgine"></td>
-    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20222252.png" width="100%" alt="tgine"></td>
-  </tr>
+   
 </table>
 
 ![Language](https://img.shields.io/badge/Language-C%2B%2B17-blue)
@@ -181,7 +174,14 @@ This project is open-source. Please see the `LICENSE` file for details. Third-pa
     <td width="50%"><img src="doc/screenshot/Screenshot%202026-07-06%20201730.png" width="100%" alt="tgine"></td>
     <td width="50%"><img src="doc/screenshot/Screenshot%202026-07-06%20202000.png" width="100%" alt="tgine"></td>
   </tr>
- 
+ <tr>
+   <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080451.png" width="100%" alt="tgine"></td>  
+   <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20221705.png" width="100%" alt="tgine"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080145.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20222252.png" width="100%" alt="tgine"></td>
+  </tr>
   <tr>
     <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20222431.png" width="100%" alt="tgine"></td>
     <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20223000.png" width="100%" alt="tgine"></td>
