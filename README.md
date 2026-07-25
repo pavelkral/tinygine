@@ -1,15 +1,15 @@
-﻿# TinyGine
+# TinyGine
 
 A lightweight, multi-API 3D game engine. 
 
 <table>
   <tr>
-    <td width="50%">
-      <img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-05-26%20224220.png" alt="Screenshot 1" width="100%">
-    </td>
-    <td width="50%">
-      <img src="https://raw.githubusercontent.com/pavelkral/tinygine/refs/heads/main/doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" alt="Obrázek 2">
-    </td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20074203.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080145.png" width="100%" alt="tgine"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080232.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080451.png" width="100%" alt="tgine"></td>
   </tr>
 </table>
 
@@ -21,13 +21,16 @@ A lightweight, multi-API 3D game engine.
 
 ## Features
 
-At the core of the engine is abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
+At the core of the engine is a highly abstracted **RHI (Render Hardware Interface)**, allowing seamless switching between Graphics APIs.
 * **API Support:** Fully implemented backends for **DirectX 12** and **Vulkan**.
-* **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer pre-pass mapping for Color, Normal, and World Position).
-* **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls.
+* **Data-Driven RHI (as a DLL):** The RHI ships as a standalone `rhi.dll` with **data-described bind-group layouts** and a **command-list** recording API (Qt QRhi / NVRHI style) — no hardcoded root signatures, backends are fully swappable.
+* **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer mapping for Color, Normal, and World Position). Lighting is computed forward into the MRT.
+* **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls, batched per material.
+* **GPU-Driven Rendering (Indirect Draw):** Compute-shader frustum culling compacts the visible instance list into a GPU buffer, then a single `DrawIndexedIndirect` issues the whole batch — zero per-object CPU cost.
+* **Frustum Culling:** CPU sphere + AABB culling for the main camera **and** every shadow cascade, toggleable live with on-screen statistics.
 * **Skeletal Animation (Assimp):** Skinned Mesh Rendering parsing `boneInfoMap` and `offsetMatrix` data from FBX/GLTF files.
 * **Compute Shader Integration:** Direct access to Compute Pipelines for parallel GPU calculations (UAV/SRV textures, buffers).
-* **Realtime Lighting:** Support for Directional and Point Lights with dynamic shadows and IBL.
+* **Realtime Lighting:** Support for Directional and Point Lights with dynamic **cascaded** shadows and IBL.
 * **Physics Integration:** Physics integration for advanced collision detection and rigid body dynamics, including skeletal ragdolls.
 * **Audio Engine:** Integrated miniaudio for spatialized 3D sound effects.
 * **Performance Profiling:** Optional Tracy integration for real-time CPU/GPU performance analysis.
@@ -52,8 +55,35 @@ At the core of the engine is abstracted **RHI (Render Hardware Interface)**, all
 
 * **SSAO (Screen Space Ambient Occlusion):** Calculates 64 random hemisphere samples, blurred and composited over the scene.
 * **SSR (Screen Space Reflections):** Real-time reflection mapping for metallic/glossy surfaces.
-* **Bloom:** High-quality glow effects rendered via ping-pong render targets.
+* **Bloom:** Soft-threshold glow rendered via ping-pong render targets.
 * **Vignette:** Cinematic lens shading.
+
+###  Anti-Aliasing (TAA)
+
+* **Temporal Anti-Aliasing:** Sub-pixel **Halton** projection jitter accumulated across frames via **camera reprojection** (from the world-position G-Buffer), with a 3×3 neighborhood colour clamp and ping-pong HDR history buffers. Delivers supersampling-quality edges and is the enabler for dense foliage/vegetation.
+
+###  HDR Rendering & Tonemapping
+
+* **Full 16-bit Float HDR Chain:** The entire offscreen pipeline is linear HDR; there is a **single** ACES filmic tonemap + gamma pass at the very end.
+* **Exposure Control:** Live exposure slider feeding the final tonemap pass.
+
+###  Cascaded Shadow Maps (CSM)
+
+* **CSM:** Up to 4 cascades packed in a texture-array shadow map, **PCF 3×3** filtering, and smooth cross-cascade blending at the seams.
+* **Unified Receivers:** Shadows are received by both meshes (in the PBR shader) and the **terrain** (via a bindless shadow array), with per-cascade depth/slope bias.
+
+###  Terrain
+
+* **Streaming Terrain (`TerrainManager`):** Tiles built from real elevation/imagery data, GPU heightmap displacement through **bindless** textures, automatic LOD/zoom driven by camera altitude, and skirts to hide tile seams. Fully integrated into culling, CSM, and fog.
+
+###  Atmospheric Fog
+
+* **Analytic Fog & Aerial Perspective:** Distance + height fog computed as a post-process from the G-Buffer world position, tinted by the atmosphere **SkyView LUT** for physically-plausible aerial perspective.
+* **MSFS-style Sun Disk:** Physically-sized sun with a soft limb-darkened edge, an HDR core, and a view-space starburst.
+
+###  Transparency
+
+* **Forward Transparent Pass:** Order-corrected **two-pass double-sided** alpha blending for glass/translucent skinned materials. Transparent submeshes are skipped in the opaque pass and rendered forward into the lit MRT (back faces, then front faces), so blending is correct **independent of viewing angle** — while normals/world-position G-Buffer targets stay intact via per-target write masks.
 
 ###  Physics (Jolt Physics Integration) [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
 
@@ -89,8 +119,8 @@ Powered by the industry-leading **Jolt Physics** engine (used in *Horizon Forbid
 The codebase is structured into clear, distinct layers:
 1.  **Helper Functions:** Image loading and mipmap generation.
 2.  **RHI Base:** The abstract interface (`RHI`, `RHIBuffer`, `RHITexture`, `RHIPipeline`).
-3.  **RHI Implementations:** The concrete classes (`RHI_DX11`, `RHI_DX12`, `RHI_Vulkan`).
-4.  **ECS & Physics:** The `GameObject`, `Component` classes, and Jolt Physics integration (`BPLayerInterfaceImpl`, etc.).
+3.  **RHI Implementations:** The concrete classes (`RHI_DX12`, `RHI_Vulkan`), built as `rhi.dll`.
+4.  **Scene & Physics:** The `GameObject` / `Component` model (composition, not ECS) and Jolt Physics integration (`BPLayerInterfaceImpl`, etc.).
 5.  **Main Engine Class:** The `Engine` class handling initialization, the main loop (`Run`), input, updating, and rendering.
 
 ## System & Pipeline
@@ -110,6 +140,8 @@ The engine ships with a few game-ready components:
 * **Gameplay Logic:** `PlayerController`.
 * **Utility:** `AudioSource`, `Animator`.
 
+
+> 📖 Detailed HTML docs live in [`doc/enginedoc`](doc/enginedoc/index.html) (engine architecture, components, vertex layouts) and [`doc/rhidoc`](doc/rhidoc/index.html) (RHI class view, dataflow, code examples).
 
 ## Getting Started
 
@@ -133,7 +165,7 @@ The engine relies on the following libraries (ensure they are linked in your pro
 Note: If no saved .json scene is found in the assets/ folder, the engine will generate a default "Bootstrap" demo level.
 
 
-## Editor Controls
+## Controls
 * `TAB`: Toggle between Editor UI mode (cursor visible) and FPS Camera mode.
 * `W, A, S, D`: Move camera (in FPS mode).
 * `Q, E`: Move camera down/up (in FPS mode).
@@ -142,3 +174,28 @@ Note: If no saved .json scene is found in the assets/ folder, the engine will ge
 ## License
 
 This project is open-source. Please see the `LICENSE` file for details. Third-party libraries are subject to their own respective licenses.
+
+## Gallery
+
+<table>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-25%20080604.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Screenshot%202026-07-06%20120523.png" width="100%" alt="tgine"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Screenshot%202026-07-06%20201730.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Screenshot%202026-07-06%20202000.png" width="100%" alt="tgine"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-06-06%20102342.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20221705.png" width="100%" alt="tgine"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20221958.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20222252.png" width="100%" alt="tgine"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20222431.png" width="100%" alt="tgine"></td>
+    <td width="50%"><img src="doc/screenshot/Sn%C3%ADmek%20obrazovky%202026-07-06%20223000.png" width="100%" alt="tgine"></td>
+  </tr>
+</table>
