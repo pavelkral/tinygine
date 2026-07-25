@@ -23,7 +23,6 @@ A lightweight, multi-API 3D game engine.
 ## Features
 
 * **API Support:** Fully implemented backends for **DirectX 12** and **Vulkan**.
-* **Data-Driven RHI (as a DLL):** The RHI ships as a standalone `rhi.dll` with **data-described bind-group layouts** and a **command-list** recording API (Qt QRhi / NVRHI style) — no hardcoded root signatures, backends are fully swappable.
 * **PBR & MRT Pipeline:** Physically Based Rendering (Albedo, Normal, Roughness, Metalness) utilizing Multiple Render Targets (G-Buffer mapping for Color, Normal, and World Position). Lighting is computed forward into the MRT.
 * **Hardware Instancing:** Highly optimized rendering of static objects using `InstanceBuffers` for massive scene populations with minimal draw calls, batched per material.
 * **Frustum Culling:** CPU sphere + AABB culling for the main camera **and** every shadow cascade, toggleable live with on-screen statistics.
