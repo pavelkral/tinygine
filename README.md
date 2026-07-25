@@ -161,7 +161,7 @@ Note: If no saved .json scene is found in the assets/ folder, the engine will ge
 
 ## License
 
-This project is open-source. Please see the `LICENSE` file for details. Third-party libraries are subject to their own respective licenses.
+Please see the `LICENSE` file for details. Third-party libraries are subject to their own respective licenses.
 
 ## Gallery
 
